@@ -103,10 +103,22 @@ function playChime() {
 }
 
 // ============================================================
-// AUTH — State observer (gerbang utama app)
+// AUTH — State observer
+// Ditunda sampai DOM ready agar getElementById tidak null
 // ============================================================
+let domReady = false;
+let pendingAuthUser = undefined;
+
 onAuthStateChanged(auth, user => {
   currentUser = user;
+  if (domReady) {
+    handleAuthChange(user);
+  } else {
+    pendingAuthUser = user;
+  }
+});
+
+function handleAuthChange(user) {
   if (user) {
     showApp();
     startListeners();
@@ -114,7 +126,7 @@ onAuthStateChanged(auth, user => {
     stopListeners();
     showLoginScreen();
   }
-});
+}
 
 // ============================================================
 // AUTH — Login
@@ -141,14 +153,18 @@ async function doLogin() {
   } catch(e) {
     btn.disabled = false;
     btn.textContent = "Masuk";
+    console.error("Login error:", e.code, e.message);
     const msgs = {
       "auth/invalid-credential":      "Email atau password salah.",
+      "auth/invalid-email":           "Format email tidak valid.",
       "auth/user-not-found":          "Akun tidak ditemukan.",
       "auth/wrong-password":          "Password salah.",
       "auth/too-many-requests":       "Terlalu banyak percobaan. Coba lagi nanti.",
       "auth/network-request-failed":  "Periksa koneksi internet Anda.",
+      "auth/user-disabled":           "Akun ini dinonaktifkan.",
+      "auth/operation-not-allowed":   "Login email/password belum diaktifkan di Firebase.",
     };
-    errEl.textContent = msgs[e.code] || "Login gagal. Periksa kembali kredensial Anda.";
+    errEl.textContent = msgs[e.code] || `Login gagal (${e.code}). Coba lagi.`;
     errEl.style.display = "block";
   }
 }
@@ -627,6 +643,12 @@ function startClock() {
 // INIT — hanya bind event statis; listener & auth dikelola sendiri
 // ============================================================
 document.addEventListener("DOMContentLoaded", () => {
+  domReady = true;
+
+  // Proses pending auth state jika onAuthStateChanged sudah fire sebelum DOM ready
+  if (pendingAuthUser !== undefined) {
+    handleAuthChange(pendingAuthUser);
+  }
 
   // ---- LOGIN SCREEN ----
   document.getElementById("btn-login").addEventListener("click", doLogin);
