@@ -4,16 +4,15 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 <meta name="theme-color" content="#f5f0e8" />
-<title>Picnic — Order Online</title>
+<title>Sawah Senja — Order</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Playfair+Display:wght@600;700&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet" />
 
-<!-- Firebase Modular SDK v10 -->
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import {
-  getFirestore, collection, doc, setDoc, getDocs, query,
-  where, orderBy, Timestamp, serverTimestamp, getCountFromServer
+  getFirestore, collection, doc, setDoc, getDocs, onSnapshot,
+  query, where, orderBy, Timestamp, serverTimestamp
 } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
 // ============================================================
@@ -32,87 +31,143 @@ const app = initializeApp(firebaseConfig);
 const db  = getFirestore(app);
 
 // ============================================================
-// AREA CODE — baca dari URL ?table=A1
+// AREA CODE dari URL  ?table=A1
 // ============================================================
-const params   = new URLSearchParams(window.location.search);
-const areaCode = (params.get("table") || "GENERAL").toUpperCase();
+const areaCode = (new URLSearchParams(window.location.search).get("table") || "GENERAL").toUpperCase();
 
 // ============================================================
-// MENU DATA
+// MENU — fallback jika Firestore belum diisi
 // ============================================================
-const MENU = [
-  // Makanan
-  { id: 1, category: "Makanan", name: "Nasi Goreng Special", price: 28000, image: "https://dummyimage.com/400x300/c4a882/fff&text=Nasi+Goreng", description: "Nasi goreng premium dengan telur, ayam suwir & acar", stock: true, bestSeller: true, prepTime: 12 },
-  { id: 2, category: "Makanan", name: "Ayam Geprek Madu", price: 32000, image: "https://dummyimage.com/400x300/b08850/fff&text=Ayam+Geprek", description: "Ayam crispy digeprek dengan sambel madu pedas manis", stock: true, bestSeller: false, prepTime: 15 },
-  { id: 3, category: "Makanan", name: "Mie Goreng Kampung", price: 25000, image: "https://dummyimage.com/400x300/c4a050/fff&text=Mie+Goreng", description: "Mie kuning goreng dengan sayur segar dan telur dadar", stock: true, bestSeller: false, prepTime: 10 },
-  { id: 4, category: "Makanan", name: "Nasi Liwet Ayam", price: 38000, image: "https://dummyimage.com/400x300/a08040/fff&text=Nasi+Liwet", description: "Nasi liwet gurih lengkap dengan ayam opor & lauk", stock: false, bestSeller: true, prepTime: 20 },
-
-  // Minuman
-  { id: 5, category: "Minuman", name: "Es Teh Manis", price: 8000, image: "https://dummyimage.com/400x300/7ab8a0/fff&text=Es+Teh", description: "Teh manis segar dengan es batu pilihan", stock: true, bestSeller: true, prepTime: 3 },
-  { id: 6, category: "Minuman", name: "Jus Alpukat", price: 18000, image: "https://dummyimage.com/400x300/5a9060/fff&text=Jus+Alpukat", description: "Alpukat segar blended dengan susu kental manis", stock: true, bestSeller: false, prepTime: 5 },
-  { id: 7, category: "Minuman", name: "Kopi Susu Gula Aren", price: 22000, image: "https://dummyimage.com/400x300/6b4226/fff&text=Kopi+Susu", description: "Espresso dengan susu fresh & gula aren asli", stock: true, bestSeller: true, prepTime: 5 },
-  { id: 8, category: "Minuman", name: "Lemonade Picnic", price: 20000, image: "https://dummyimage.com/400x300/d4b84a/fff&text=Lemonade", description: "Lemon segar, mint & soda - signature drink kami", stock: true, bestSeller: false, prepTime: 4 },
-
-  // Snack
-  { id: 9,  category: "Snack", name: "Pisang Goreng Crispy", price: 15000, image: "https://dummyimage.com/400x300/c8903a/fff&text=Pisang+Goreng", description: "Pisang raja goreng crispy dengan meses & keju", stock: true, bestSeller: false, prepTime: 8 },
-  { id: 10, category: "Snack", name: "Cireng Isi Ayam", price: 18000, image: "https://dummyimage.com/400x300/b07030/fff&text=Cireng", description: "Aci goreng crispy isi ayam berbumbu kacang", stock: true, bestSeller: true, prepTime: 10 },
-  { id: 11, category: "Snack", name: "Singkong Bakar", price: 12000, image: "https://dummyimage.com/400x300/986040/fff&text=Singkong", description: "Singkong bakar empuk dengan mentega & keju parut", stock: true, bestSeller: false, prepTime: 15 },
-
-  // Paket Piknik
-  { id: 12, category: "Paket Piknik", name: "Paket Piknik Duo", price: 75000, image: "https://dummyimage.com/400x300/88a060/fff&text=Paket+Duo", description: "2 Nasi Goreng + 2 Minuman + 1 Snack pilihan", stock: true, bestSeller: true, prepTime: 20 },
-  { id: 13, category: "Paket Piknik", name: "Paket Piknik Family", price: 145000, image: "https://dummyimage.com/400x300/6a8850/fff&text=Paket+Family", description: "4 Nasi Box + 4 Minuman + 2 Snack pilihan", stock: true, bestSeller: false, prepTime: 30 },
-  { id: 14, category: "Paket Piknik", name: "Paket Romantis", price: 95000, image: "https://dummyimage.com/400x300/b07888/fff&text=Paket+Romantis", description: "Nasi Liwet for 2 + 2 Kopi Susu + dekorasi bunga", stock: true, bestSeller: false, prepTime: 25 },
+const MENU_FALLBACK = [
+  { id:1,  category:"Makanan",      name:"Nasi Goreng Special",  price:28000,  image:"https://dummyimage.com/400x300/c4a882/fff&text=Nasi+Goreng",  description:"Nasi goreng premium dengan telur, ayam suwir & acar",   stock:true,  bestSeller:true,  prepTime:12 },
+  { id:2,  category:"Makanan",      name:"Ayam Geprek Madu",     price:32000,  image:"https://dummyimage.com/400x300/b08850/fff&text=Ayam+Geprek",   description:"Ayam crispy digeprek dengan sambel madu pedas manis",   stock:true,  bestSeller:false, prepTime:15 },
+  { id:3,  category:"Makanan",      name:"Mie Goreng Kampung",   price:25000,  image:"https://dummyimage.com/400x300/c4a050/fff&text=Mie+Goreng",    description:"Mie kuning goreng dengan sayur segar dan telur dadar",  stock:true,  bestSeller:false, prepTime:10 },
+  { id:4,  category:"Makanan",      name:"Nasi Liwet Ayam",      price:38000,  image:"https://dummyimage.com/400x300/a08040/fff&text=Nasi+Liwet",    description:"Nasi liwet gurih lengkap dengan ayam opor & lauk",      stock:false, bestSeller:true,  prepTime:20 },
+  { id:5,  category:"Minuman",      name:"Es Teh Manis",         price:8000,   image:"https://dummyimage.com/400x300/7ab8a0/fff&text=Es+Teh",        description:"Teh manis segar dengan es batu pilihan",               stock:true,  bestSeller:true,  prepTime:3  },
+  { id:6,  category:"Minuman",      name:"Jus Alpukat",          price:18000,  image:"https://dummyimage.com/400x300/5a9060/fff&text=Jus+Alpukat",   description:"Alpukat segar blended dengan susu kental manis",        stock:true,  bestSeller:false, prepTime:5  },
+  { id:7,  category:"Minuman",      name:"Kopi Susu Gula Aren",  price:22000,  image:"https://dummyimage.com/400x300/6b4226/fff&text=Kopi+Susu",     description:"Espresso dengan susu fresh & gula aren asli",           stock:true,  bestSeller:true,  prepTime:5  },
+  { id:8,  category:"Minuman",      name:"Lemonade Senja",       price:20000,  image:"https://dummyimage.com/400x300/d4b84a/fff&text=Lemonade",      description:"Lemon segar, mint & soda — signature drink kami",       stock:true,  bestSeller:false, prepTime:4  },
+  { id:9,  category:"Snack",        name:"Pisang Goreng Crispy", price:15000,  image:"https://dummyimage.com/400x300/c8903a/fff&text=Pisang+Goreng", description:"Pisang raja goreng crispy dengan meses & keju",         stock:true,  bestSeller:false, prepTime:8  },
+  { id:10, category:"Snack",        name:"Cireng Isi Ayam",      price:18000,  image:"https://dummyimage.com/400x300/b07030/fff&text=Cireng",        description:"Aci goreng crispy isi ayam berbumbu kacang",            stock:true,  bestSeller:true,  prepTime:10 },
+  { id:11, category:"Snack",        name:"Singkong Bakar",       price:12000,  image:"https://dummyimage.com/400x300/986040/fff&text=Singkong",      description:"Singkong bakar empuk dengan mentega & keju parut",      stock:true,  bestSeller:false, prepTime:15 },
+  { id:12, category:"Paket Senja",  name:"Paket Senja Duo",      price:75000,  image:"https://dummyimage.com/400x300/88a060/fff&text=Paket+Duo",     description:"2 Nasi Goreng + 2 Minuman + 1 Snack pilihan",          stock:true,  bestSeller:true,  prepTime:20 },
+  { id:13, category:"Paket Senja",  name:"Paket Senja Family",   price:145000, image:"https://dummyimage.com/400x300/6a8850/fff&text=Paket+Family",  description:"4 Nasi Box + 4 Minuman + 2 Snack pilihan",             stock:true,  bestSeller:false, prepTime:30 },
+  { id:14, category:"Paket Senja",  name:"Paket Romantis Senja", price:95000,  image:"https://dummyimage.com/400x300/b07888/fff&text=Paket+Romantis",description:"Nasi Liwet for 2 + 2 Kopi Susu + dekorasi bunga",      stock:true,  bestSeller:false, prepTime:25 },
 ];
 
-const CATEGORIES = ["Semua", ...new Set(MENU.map(m => m.category))];
+let MENU       = [...MENU_FALLBACK];
+let CATEGORIES = buildCategories();
 const SERVICE_FEE = 2000;
+
+function buildCategories() {
+  return ["Semua", ...new Set(MENU.map(m => m.category))];
+}
 
 // ============================================================
 // STATE
 // ============================================================
-let cart        = {};     // { itemId: { ...menuItem, qty, notes } }
+let cart           = {};
 let activeCategory = "Semua";
-let cartOpen    = false;
-let checkoutStep = "menu"; // menu | checkout | success
-let lastOrder   = null;
+let cartOpen       = false;
+let checkoutStep   = "menu"; // menu | checkout | success
+let lastOrder      = null;
+
+// ============================================================
+// MENU LISTENER — Firestore "menu" collection, fallback ke dummy
+// ============================================================
+function startMenuListener() {
+  try {
+    onSnapshot(
+      query(collection(db, "menu"), orderBy("category"), orderBy("name")),
+      snap => {
+        MENU = snap.empty
+          ? [...MENU_FALLBACK]
+          : snap.docs.map(d => ({
+              id: d.id,
+              ...d.data(),
+              price:      Number(d.data().price)    || 0,
+              stock:      d.data().stock             !== false,
+              bestSeller: d.data().bestSeller        === true,
+              prepTime:   Number(d.data().prepTime)  || 0,
+            }));
+
+        CATEGORIES = buildCategories();
+        if (!CATEGORIES.includes(activeCategory)) activeCategory = "Semua";
+
+        if (checkoutStep === "menu") {
+          const grid = document.getElementById("menu-grid");
+          if (grid) grid.innerHTML = getFilteredMenu().map(renderMenuCard).join("");
+          rebuildCategoryTabs();
+          rebuildBestSeller();
+          updateCartUI();
+        }
+      },
+      () => {
+        MENU = [...MENU_FALLBACK];
+        CATEGORIES = buildCategories();
+      }
+    );
+  } catch(e) {
+    MENU = [...MENU_FALLBACK];
+    CATEGORIES = buildCategories();
+  }
+}
+
+function rebuildCategoryTabs() {
+  const wrap = document.getElementById("category-tabs");
+  if (!wrap) return;
+  wrap.innerHTML = CATEGORIES.map(c => `
+    <button onclick="setCategory('${c}')" data-cat="${c}"
+      class="snap-start flex-shrink-0 tab-btn ${c === activeCategory ? "tab-active" : ""} px-4 py-2 rounded-full text-sm font-medium transition-all">
+      ${c}
+    </button>`).join("");
+}
+
+function rebuildBestSeller() {
+  const wrap = document.getElementById("best-seller-row");
+  if (!wrap) return;
+  const bs = MENU.filter(m => m.bestSeller && m.stock).slice(0, 3);
+  const section = document.getElementById("best-seller-section");
+  if (bs.length === 0) { if (section) section.style.display = "none"; return; }
+  if (section) section.style.display = "";
+  wrap.innerHTML = bs.map(item => `
+    <div class="snap-start flex-shrink-0 w-48 rounded-2xl overflow-hidden bg-white shadow-md border border-earth-100">
+      <img src="${item.image||""}" alt="${item.name}" class="w-full h-28 object-cover" loading="lazy" onerror="this.style.background='#ede8db'" />
+      <div class="p-3">
+        <div class="text-xs font-bold text-amber-700 mb-0.5">🔥 Best Seller</div>
+        <div class="text-sm font-semibold text-earth-900 leading-tight mb-1">${item.name}</div>
+        <div class="text-xs font-bold text-amber-700">${fmt(item.price)}</div>
+        <button onclick="addToCart('${item.id}')" class="mt-2 w-full btn-sm-primary rounded-xl py-1.5 text-xs font-semibold">+ Tambah</button>
+      </div>
+    </div>`).join("");
+}
 
 // ============================================================
 // HELPERS
 // ============================================================
-function formatCurrency(n) {
-  return "Rp " + Number(n).toLocaleString("id-ID");
-}
+const fmt = n => "Rp " + Number(n).toLocaleString("id-ID");
 
-function cartItemCount() {
-  return Object.values(cart).reduce((s, i) => s + i.qty, 0);
-}
-
-function cartSubtotal() {
-  return Object.values(cart).reduce((s, i) => s + i.price * i.qty, 0);
-}
-
-function cartTotal() {
-  return cartSubtotal() + SERVICE_FEE;
-}
+function cartItemCount() { return Object.values(cart).reduce((s, i) => s + i.qty, 0); }
+function cartSubtotal()  { return Object.values(cart).reduce((s, i) => s + i.price * i.qty, 0); }
+function cartTotal()     { return cartSubtotal() + SERVICE_FEE; }
 
 function getFilteredMenu() {
-  if (activeCategory === "Semua") return MENU;
-  return MENU.filter(m => m.category === activeCategory);
+  return activeCategory === "Semua" ? MENU : MENU.filter(m => m.category === activeCategory);
 }
 
+// ============================================================
+// ORDER ID — collision-safe
+// ============================================================
 async function generateOrderId() {
   try {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const snap = await getDocs(query(
+    const today = new Date(); today.setHours(0,0,0,0);
+    const snap  = await getDocs(query(
       collection(db, "orders"),
       where("createdAt", ">=", Timestamp.fromDate(today))
     ));
-    const num = String(snap.size + 1).padStart(3, "0");
-    return `${areaCode}-${num}`;
+    return `${areaCode}-${String(snap.size + 1).padStart(3, "0")}`;
   } catch {
-    const num = String(Math.floor(Math.random() * 900) + 100);
-    return `${areaCode}-${num}`;
+    return `${areaCode}-${String(Math.floor(Math.random() * 900) + 100)}`;
   }
 }
 
@@ -120,80 +175,65 @@ async function generateOrderId() {
 // CART LOGIC
 // ============================================================
 function addToCart(itemId) {
-  const item = MENU.find(m => m.id === itemId);
+  const id   = isNaN(itemId) ? itemId : Number(itemId);
+  const item = MENU.find(m => m.id == id);
   if (!item || !item.stock) return;
-  if (cart[itemId]) {
-    cart[itemId].qty++;
-  } else {
-    cart[itemId] = { ...item, qty: 1, notes: "" };
-  }
+  cart[id] ? cart[id].qty++ : (cart[id] = { ...item, qty: 1, notes: "" });
   updateCartUI();
   showToast(`${item.name} ditambahkan`, "success");
 }
 
 function removeFromCart(itemId) {
-  if (!cart[itemId]) return;
-  if (cart[itemId].qty > 1) {
-    cart[itemId].qty--;
-  } else {
-    delete cart[itemId];
-  }
+  const id = isNaN(itemId) ? itemId : Number(itemId);
+  if (!cart[id]) return;
+  cart[id].qty > 1 ? cart[id].qty-- : delete cart[id];
   updateCartUI();
 }
 
 function deleteFromCart(itemId) {
-  delete cart[itemId];
+  const id = isNaN(itemId) ? itemId : Number(itemId);
+  delete cart[id];
   updateCartUI();
 }
 
 function setItemNotes(itemId, notes) {
-  if (cart[itemId]) cart[itemId].notes = notes;
+  const id = isNaN(itemId) ? itemId : Number(itemId);
+  if (cart[id]) cart[id].notes = notes;
 }
 
 // ============================================================
-// CHECKOUT
+// CHECKOUT — submit order ke Firestore
 // ============================================================
 async function submitOrder(customerName, customerWhatsapp, paymentMethod) {
-  const btnSubmit = document.getElementById("btn-submit-order");
-  if (btnSubmit) { btnSubmit.disabled = true; btnSubmit.textContent = "Memproses…"; }
+  const btn = document.getElementById("btn-submit-order");
+  if (btn) { btn.disabled = true; btn.textContent = "Memproses…"; }
 
   try {
-    const orderId = await generateOrderId();
-    const items = Object.values(cart).map(i => ({
-      name: i.name, qty: i.qty, price: i.price, notes: i.notes
-    }));
-    const subtotal = cartSubtotal();
-    const total    = cartTotal();
+    const orderId       = await generateOrderId();
+    const items         = Object.values(cart).map(i => ({ name: i.name, qty: i.qty, price: i.price, notes: i.notes || "" }));
+    const subtotal      = cartSubtotal();
+    const total         = cartTotal();
     const paymentStatus = paymentMethod === "QRIS" ? "PENDING" : "UNPAID";
 
     const orderData = {
-      orderId,
-      areaCode,
-      customerName,
-      customerWhatsapp,
-      items,
-      subtotal,
-      serviceFee: SERVICE_FEE,
-      total,
-      paymentMethod,
-      paymentStatus,
+      orderId, areaCode, customerName, customerWhatsapp,
+      items, subtotal, serviceFee: SERVICE_FEE, total,
+      paymentMethod, paymentStatus,
       orderStatus: "NEW",
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-      readyAt: null,
-      completedAt: null,
-      whatsappSent: false,
+      createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+      readyAt: null, completedAt: null, whatsappSent: false,
     };
 
     await setDoc(doc(collection(db, "orders")), orderData);
 
-    lastOrder = { ...orderData, orderId, total, customerName, paymentMethod, paymentStatus };
-    cart = {};
+    lastOrder    = { ...orderData, orderId, total, customerName, areaCode, paymentMethod, paymentStatus };
+    cart         = {};
     checkoutStep = "success";
     renderApp();
   } catch(e) {
+    console.error(e);
     showToast("Gagal mengirim order. Coba lagi.", "error");
-    if (btnSubmit) { btnSubmit.disabled = false; btnSubmit.textContent = "Konfirmasi Pesanan"; }
+    if (btn) { btn.disabled = false; btn.textContent = "Konfirmasi Pesanan"; }
   }
 }
 
@@ -201,21 +241,19 @@ async function submitOrder(customerName, customerWhatsapp, paymentMethod) {
 // TOAST
 // ============================================================
 function showToast(msg, type = "info") {
-  const colors = { success: "#16a34a", error: "#dc2626", info: "#d97706" };
+  const colors = { success:"#15803d", error:"#dc2626", info:"#b45309" };
   const t = document.createElement("div");
   t.style.cssText = `
     position:fixed;bottom:100px;left:50%;transform:translateX(-50%) translateY(20px);
-    background:${colors[type]||colors.info};color:#fff;padding:10px 20px;
-    border-radius:12px;font-size:13px;font-weight:500;z-index:9999;
-    transition:all 0.3s;opacity:0;white-space:nowrap;box-shadow:0 4px 20px rgba(0,0,0,0.2);
-    font-family:'DM Sans',sans-serif;
-  `;
+    background:${colors[type]||colors.info};color:#fff;padding:10px 20px;border-radius:12px;
+    font-size:13px;font-weight:500;z-index:9999;transition:all 0.3s;opacity:0;
+    white-space:nowrap;box-shadow:0 4px 20px rgba(0,0,0,0.2);
+    font-family:'DM Sans',sans-serif;pointer-events:none;`;
   t.textContent = msg;
   document.body.appendChild(t);
-  requestAnimationFrame(() => { t.style.opacity = "1"; t.style.transform = "translateX(-50%) translateY(0)"; });
+  requestAnimationFrame(() => { t.style.opacity="1"; t.style.transform="translateX(-50%) translateY(0)"; });
   setTimeout(() => {
-    t.style.opacity = "0";
-    t.style.transform = "translateX(-50%) translateY(20px)";
+    t.style.opacity="0"; t.style.transform="translateX(-50%) translateY(20px)";
     setTimeout(() => t.remove(), 300);
   }, 2200);
 }
@@ -225,19 +263,10 @@ function showToast(msg, type = "info") {
 // ============================================================
 function renderApp() {
   const root = document.getElementById("app-root");
-
-  if (checkoutStep === "success") {
-    root.innerHTML = renderSuccessPage();
-    return;
-  }
-  if (checkoutStep === "checkout") {
-    root.innerHTML = renderCheckoutPage();
-    bindCheckoutEvents();
-    return;
-  }
-
+  if (!root) return;
+  if (checkoutStep === "success")  { root.innerHTML = renderSuccessPage();  return; }
+  if (checkoutStep === "checkout") { root.innerHTML = renderCheckoutPage(); bindCheckoutEvents(); return; }
   root.innerHTML = renderMenuPage();
-  bindMenuEvents();
   updateCartUI();
 }
 
@@ -249,10 +278,21 @@ function renderSuccessPage() {
   return `
   <div class="min-h-screen flex flex-col items-center justify-center px-4 py-12 bg-cream">
     <div class="w-full max-w-sm">
+
+      <!-- Brand mark kecil -->
+      <div class="flex items-center justify-center gap-2 mb-8">
+        <div class="w-8 h-8 rounded-xl bg-gradient-to-br from-amber-600 to-orange-500 flex items-center justify-center">
+          <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="4"/><path stroke-linecap="round" d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>
+          </svg>
+        </div>
+        <span class="font-display font-bold text-earth-800 text-base">Sawah Senja</span>
+      </div>
+
       <div class="text-center mb-8">
-        <div class="w-20 h-20 rounded-full bg-green-100 border-4 border-green-400 flex items-center justify-center mx-auto mb-4 text-4xl">🎉</div>
+        <div class="w-20 h-20 rounded-full bg-green-100 border-4 border-green-400 flex items-center justify-center mx-auto mb-4 text-4xl">🌾</div>
         <div class="font-display text-2xl font-bold text-earth-800 mb-1">Pesanan Diterima!</div>
-        <div class="text-sm text-earth-500">Silahkan tunggu di area piknik Anda</div>
+        <div class="text-sm text-earth-500">Terima kasih, silahkan nikmati suasana sawah 🌿</div>
       </div>
 
       <div class="card-warm rounded-3xl p-6 mb-4 space-y-3">
@@ -261,29 +301,32 @@ function renderSuccessPage() {
           <span class="font-mono font-bold text-earth-900 text-lg">${o.orderId}</span>
         </div>
         <div class="flex justify-between">
-          <span class="text-sm text-earth-500">Area Piknik</span>
+          <span class="text-sm text-earth-500">Area</span>
           <span class="font-semibold text-earth-800">${o.areaCode}</span>
         </div>
         <div class="flex justify-between">
           <span class="text-sm text-earth-500">Total</span>
-          <span class="font-bold text-earth-900">${formatCurrency(o.total)}</span>
+          <span class="font-bold text-earth-900">${fmt(o.total)}</span>
         </div>
         <div class="flex justify-between">
           <span class="text-sm text-earth-500">Pembayaran</span>
           <span class="font-semibold text-earth-800">${o.paymentMethod}</span>
         </div>
-        <div class="pt-3 border-t border-earth-200">
-          <div class="text-xs text-earth-500 text-center">Status pembayaran: <span class="font-semibold ${o.paymentStatus==="PENDING"?"text-amber-600":"text-red-500"}">${o.paymentStatus}</span></div>
+        <div class="pt-3 border-t border-earth-200 text-center">
+          <span class="text-xs text-earth-500">Status: </span>
+          <span class="text-xs font-semibold ${o.paymentStatus==="PENDING"?"text-amber-600":"text-red-500"}">${o.paymentStatus}</span>
         </div>
       </div>
 
       <div class="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-sm text-amber-800 mb-6">
-        📍 <strong>Instruksi Pickup:</strong> Makanan akan diantar langsung ke area <strong>${o.areaCode}</strong> Anda saat sudah siap.
+        🌾 <strong>Info Pengiriman:</strong> Pesanan akan diantar langsung ke area <strong>${o.areaCode}</strong> saat sudah siap — dari dapur Sawah Senja.
       </div>
 
       <button onclick="resetApp()" class="btn-primary w-full py-4 rounded-2xl font-semibold text-base">
         Pesan Lagi
       </button>
+
+      <div class="text-center mt-5 text-xs text-earth-400">Sawah Senja · Makan enak di pinggir sawah 🌾</div>
     </div>
   </div>`;
 }
@@ -302,78 +345,71 @@ function renderCheckoutPage() {
         <div class="text-sm font-medium text-earth-800 truncate">${i.qty}x ${i.name}</div>
         ${i.notes ? `<div class="text-xs text-earth-400 italic">${i.notes}</div>` : ""}
       </div>
-      <div class="text-sm font-semibold text-earth-700 ml-3">${formatCurrency(i.price * i.qty)}</div>
-    </div>
-  `).join("");
+      <div class="text-sm font-semibold text-earth-700 ml-3">${fmt(i.price * i.qty)}</div>
+    </div>`).join("");
 
   return `
   <div class="min-h-screen bg-cream pb-32">
-
     <!-- Header -->
-    <div class="sticky top-0 z-40 bg-cream/90 backdrop-blur-sm border-b border-earth-100 px-4 py-4 flex items-center gap-3">
-      <button onclick="backToMenu()" class="w-9 h-9 rounded-xl bg-earth-100 flex items-center justify-center">
+    <div class="sticky top-0 z-40 bg-cream/90 backdrop-blur-sm border-b border-earth-100 px-4 py-3 flex items-center gap-3">
+      <button onclick="backToMenu()" class="w-9 h-9 rounded-xl bg-earth-100 flex items-center justify-center active:scale-95 transition-transform">
         <svg class="w-5 h-5 text-earth-700" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
       </button>
-      <div class="font-display font-bold text-earth-900 text-lg">Checkout</div>
+      <div>
+        <div class="font-display font-bold text-earth-900 text-base leading-none">Checkout</div>
+        <div class="text-earth-400 text-xs">Sawah Senja</div>
+      </div>
     </div>
 
-    <div class="max-w-lg mx-auto px-4 py-6 space-y-5">
-
-      <!-- Order Summary -->
+    <div class="max-w-lg mx-auto px-4 py-5 space-y-4">
+      <!-- Ringkasan -->
       <div class="card-warm rounded-3xl p-5">
-        <div class="font-semibold text-earth-800 mb-3">Ringkasan Pesanan</div>
+        <div class="font-semibold text-earth-800 mb-3 flex items-center gap-2">
+          <span>🧾</span> Ringkasan Pesanan
+        </div>
         <div class="space-y-1">${itemsHtml}</div>
         <div class="mt-3 pt-3 border-t border-earth-200 space-y-1.5">
-          <div class="flex justify-between text-sm text-earth-500">
-            <span>Subtotal</span><span>${formatCurrency(sub)}</span>
-          </div>
-          <div class="flex justify-between text-sm text-earth-500">
-            <span>Service fee</span><span>${formatCurrency(SERVICE_FEE)}</span>
-          </div>
-          <div class="flex justify-between font-bold text-earth-900 text-base pt-1">
-            <span>Total</span><span>${formatCurrency(total)}</span>
-          </div>
+          <div class="flex justify-between text-sm text-earth-500"><span>Subtotal</span><span>${fmt(sub)}</span></div>
+          <div class="flex justify-between text-sm text-earth-500"><span>Service fee</span><span>${fmt(SERVICE_FEE)}</span></div>
+          <div class="flex justify-between font-bold text-earth-900 text-base pt-1"><span>Total</span><span>${fmt(total)}</span></div>
         </div>
       </div>
 
-      <!-- Customer Form -->
+      <!-- Data Pemesan -->
       <div class="card-warm rounded-3xl p-5 space-y-4">
-        <div class="font-semibold text-earth-800">Data Pemesan</div>
+        <div class="font-semibold text-earth-800 flex items-center gap-2"><span>👤</span> Data Pemesan</div>
         <div>
           <label class="text-xs text-earth-500 font-medium mb-1.5 block">Nama Lengkap *</label>
-          <input id="inp-name" type="text" placeholder="Contoh: Budi Santoso" maxlength="60"
-            class="input-field" />
+          <input id="inp-name" type="text" placeholder="Contoh: Budi Santoso" maxlength="60" autocomplete="name" class="input-field" />
         </div>
         <div>
           <label class="text-xs text-earth-500 font-medium mb-1.5 block">Nomor WhatsApp *</label>
-          <input id="inp-wa" type="tel" placeholder="628xxxxxxxxxxxx" maxlength="20"
-            class="input-field" />
-          <div class="text-xs text-earth-400 mt-1">Untuk notifikasi pesanan siap</div>
+          <input id="inp-wa" type="tel" placeholder="628xxxxxxxxxxxx" maxlength="20" autocomplete="tel" class="input-field" />
+          <div class="text-xs text-earth-400 mt-1">Untuk notifikasi saat pesanan siap 🔔</div>
         </div>
       </div>
 
-      <!-- Payment Method -->
+      <!-- Metode Bayar -->
       <div class="card-warm rounded-3xl p-5">
-        <div class="font-semibold text-earth-800 mb-3">Metode Pembayaran</div>
+        <div class="font-semibold text-earth-800 mb-3 flex items-center gap-2"><span>💳</span> Metode Pembayaran</div>
         <div class="space-y-2.5">
-          ${["QRIS","Cash","Transfer"].map(m => `
-          <label class="flex items-center gap-3 cursor-pointer group">
-            <input type="radio" name="payment" value="${m}" ${m==="QRIS"?"checked":""} class="w-4 h-4 accent-amber-600" />
-            <div class="flex-1">
-              <div class="text-sm font-medium text-earth-800">${m}</div>
-              <div class="text-xs text-earth-400">${m==="QRIS"?"Scan QR saat pickup":m==="Cash"?"Bayar tunai ke kasir":"Transfer bank"}</div>
+          ${["QRIS","Cash","Transfer"].map((m, i) => `
+          <label class="flex items-center gap-3 cursor-pointer p-3 rounded-2xl border border-earth-100 hover:border-amber-300 hover:bg-amber-50/50 transition-all">
+            <input type="radio" name="payment" value="${m}" ${i===0?"checked":""} class="w-4 h-4 accent-amber-600" />
+            <div>
+              <div class="text-sm font-semibold text-earth-800">${m}</div>
+              <div class="text-xs text-earth-400">${m==="QRIS"?"Scan QR — ditunjukkan saat pickup":m==="Cash"?"Bayar tunai ke kasir Sawah Senja":"Transfer bank — konfirmasi ke kasir"}</div>
             </div>
           </label>`).join("")}
         </div>
       </div>
-
     </div>
 
-    <!-- Bottom CTA -->
+    <!-- CTA sticky bottom -->
     <div class="fixed bottom-0 left-0 right-0 bg-cream/95 backdrop-blur-sm border-t border-earth-100 px-4 py-4 safe-bottom">
       <div class="max-w-lg mx-auto">
         <button id="btn-submit-order" onclick="handleSubmitOrder()" class="btn-primary w-full py-4 rounded-2xl font-semibold text-base">
-          Konfirmasi Pesanan · ${formatCurrency(total)}
+          Konfirmasi Pesanan · ${fmt(total)}
         </button>
       </div>
     </div>
@@ -389,56 +425,79 @@ function renderMenuPage() {
   return `
   <div class="min-h-screen bg-cream">
 
-    <!-- Splash Header -->
-    <div class="relative overflow-hidden bg-gradient-to-br from-amber-700 via-amber-600 to-orange-500 px-5 pt-12 pb-16 text-white">
-      <div class="absolute inset-0 opacity-10" style="background-image:url('data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><circle cx=%2250%22 cy=%2250%22 r=%2250%22 fill=%22%23fff%22 opacity=%220.3%22/></svg>');background-size:80px 80px;"></div>
+    <!-- ===== SPLASH HEADER — Sawah Senja ===== -->
+    <div class="relative overflow-hidden px-5 pt-14 pb-20 text-white" style="background:linear-gradient(145deg,#78350f 0%,#92400e 35%,#b45309 70%,#d97706 100%);">
+      <!-- Tekstur padi (SVG pattern) -->
+      <div class="absolute inset-0 opacity-[0.08]" style="background-image:url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='60' height='60' viewBox='0 0 60 60'%3E%3Cpath d='M30 5 Q35 15 30 25 Q25 15 30 5Z M30 35 Q35 45 30 55 Q25 45 30 35Z M5 30 Q15 35 25 30 Q15 25 5 30Z M35 30 Q45 35 55 30 Q45 25 35 30Z' fill='%23fff'/%3E%3C/svg%3E\");background-size:60px 60px;"></div>
+
+      <!-- Matahari senja dekoratif -->
+      <div class="absolute -top-12 -right-12 w-48 h-48 rounded-full opacity-10" style="background:radial-gradient(circle, #fbbf24 0%, transparent 70%);"></div>
+      <div class="absolute -bottom-6 -left-6 w-32 h-32 rounded-full opacity-10" style="background:radial-gradient(circle, #f97316 0%, transparent 70%);"></div>
+
       <div class="relative z-10">
-        <div class="inline-flex items-center gap-2 bg-white/20 backdrop-blur-sm rounded-full px-3 py-1.5 mb-4">
-          <span class="text-xs font-medium">🧺 Area Piknik</span>
-          <span class="font-mono font-bold text-sm">${areaCode}</span>
+        <!-- Brand -->
+        <div class="flex items-center gap-2.5 mb-5">
+          <div class="w-9 h-9 rounded-xl bg-white/20 backdrop-blur-sm flex items-center justify-center border border-white/30">
+            <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+              <circle cx="12" cy="12" r="4"/><path stroke-linecap="round" d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>
+            </svg>
+          </div>
+          <div>
+            <div class="font-display font-bold text-white text-lg leading-none">Sawah Senja</div>
+            <div class="text-amber-200/70 text-[11px]">Makan enak di pinggir sawah</div>
+          </div>
         </div>
-        <div class="font-display text-3xl font-bold leading-tight mb-1">Picnic<br/>Self Order</div>
-        <div class="text-amber-100 text-sm">Pesan makanan favorit Anda 🌿</div>
+
+        <!-- Area badge -->
+        <div class="inline-flex items-center gap-2 bg-white/15 backdrop-blur-sm rounded-full px-3 py-1.5 mb-4 border border-white/20">
+          <svg class="w-3 h-3 text-amber-200" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M5.05 4.05a7 7 0 119.9 9.9L10 18.9l-4.95-4.95a7 7 0 010-9.9zM10 11a2 2 0 100-4 2 2 0 000 4z" clip-rule="evenodd"/></svg>
+          <span class="text-xs text-amber-100 font-medium">Area</span>
+          <span class="font-mono font-bold text-white text-sm">${areaCode}</span>
+        </div>
+
+        <div class="font-display text-4xl font-bold leading-tight mb-1">Selamat<br/>Datang 🌾</div>
+        <div class="text-amber-100/80 text-sm mt-1">Pilih menu favoritmu dan nikmati senja</div>
       </div>
     </div>
 
-    <!-- Promo Banner -->
-    <div class="mx-4 -mt-6 relative z-10">
-      <div class="bg-gradient-to-r from-green-700 to-emerald-600 rounded-2xl px-4 py-3 flex items-center gap-3 shadow-lg">
+    <!-- ===== PROMO BANNER ===== -->
+    <div class="mx-4 -mt-7 relative z-10">
+      <div class="bg-gradient-to-r from-emerald-700 to-teal-600 rounded-2xl px-4 py-3 flex items-center gap-3 shadow-lg shadow-emerald-900/20">
         <div class="text-2xl">🎁</div>
-        <div>
-          <div class="text-white font-semibold text-sm">Promo Hari Ini!</div>
-          <div class="text-emerald-100 text-xs">Gratis 1 Es Teh untuk setiap Paket Piknik</div>
+        <div class="flex-1">
+          <div class="text-white font-semibold text-sm">Promo Sore Ini!</div>
+          <div class="text-emerald-100 text-xs">Gratis Es Teh untuk setiap Paket Senja</div>
         </div>
+        <div class="text-emerald-200 text-xs font-mono bg-emerald-800/40 px-2 py-1 rounded-lg">Today</div>
       </div>
     </div>
 
-    <div class="pb-40 pt-4">
+    <div class="pb-40 pt-5">
 
-      <!-- Recommended -->
-      <div class="px-4 mt-4">
-        <div class="flex items-center gap-2 mb-3">
-          <span class="font-display font-bold text-earth-900 text-base">⭐ Best Seller</span>
+      <!-- ===== BEST SELLER ===== -->
+      <div id="best-seller-section" class="${recommended.length===0?"hidden":""}">
+        <div class="px-4 mb-3 flex items-center gap-2">
+          <div class="h-px flex-1 bg-earth-100"></div>
+          <span class="font-display font-bold text-earth-700 text-sm">⭐ Best Seller</span>
+          <div class="h-px flex-1 bg-earth-100"></div>
         </div>
-        <div class="flex gap-3 overflow-x-auto pb-2 -mx-4 px-4 snap-x scroll-smooth">
+        <div id="best-seller-row" class="flex gap-3 overflow-x-auto pb-2 px-4 snap-x scroll-smooth">
           ${recommended.map(item => `
           <div class="snap-start flex-shrink-0 w-48 rounded-2xl overflow-hidden bg-white shadow-md border border-earth-100">
-            <img src="${item.image}" alt="${item.name}" class="w-full h-28 object-cover" loading="lazy" />
+            <img src="${item.image||""}" alt="${item.name}" class="w-full h-28 object-cover" loading="lazy" onerror="this.style.background='#ede8db'" />
             <div class="p-3">
-              <div class="text-xs font-bold text-amber-700 mb-0.5">🔥 Best Seller</div>
+              <div class="text-[10px] font-bold text-amber-700 mb-0.5">🔥 Best Seller</div>
               <div class="text-sm font-semibold text-earth-900 leading-tight mb-1">${item.name}</div>
-              <div class="text-xs font-bold text-amber-700">${formatCurrency(item.price)}</div>
-              <button onclick="addToCart(${item.id})" class="mt-2 w-full btn-sm-primary rounded-xl py-1.5 text-xs font-semibold">
-                + Tambah
-              </button>
+              <div class="text-xs font-bold text-amber-700">${fmt(item.price)}</div>
+              <button onclick="addToCart('${item.id}')" class="mt-2 w-full btn-sm-primary rounded-xl py-1.5 text-xs font-semibold">+ Tambah</button>
             </div>
           </div>`).join("")}
         </div>
       </div>
 
-      <!-- Category Tabs -->
-      <div class="px-4 mt-5">
-        <div class="flex gap-2 overflow-x-auto pb-1 -mx-4 px-4 snap-x">
+      <!-- ===== CATEGORY TABS ===== -->
+      <div class="px-4 mt-4">
+        <div id="category-tabs" class="flex gap-2 overflow-x-auto pb-1 -mx-4 px-4 snap-x">
           ${CATEGORIES.map(c => `
           <button onclick="setCategory('${c}')" data-cat="${c}"
             class="snap-start flex-shrink-0 tab-btn ${c===activeCategory?"tab-active":""} px-4 py-2 rounded-full text-sm font-medium transition-all">
@@ -447,174 +506,205 @@ function renderMenuPage() {
         </div>
       </div>
 
-      <!-- Menu Grid -->
+      <!-- ===== MENU GRID ===== -->
       <div id="menu-grid" class="px-4 mt-4 grid grid-cols-2 gap-3">
-        ${getFilteredMenu().map(item => renderMenuCard(item)).join("")}
+        ${getFilteredMenu().map(renderMenuCard).join("")}
       </div>
 
+      <!-- Footer brand -->
+      <div class="px-4 mt-10 mb-4 text-center">
+        <div class="text-earth-300 text-xs">Sawah Senja · Makan enak di pinggir sawah 🌾</div>
+      </div>
     </div>
 
-    <!-- Cart Floating Button -->
-    <div id="cart-fab" class="fixed bottom-6 left-4 right-4 z-30 transition-all duration-300 ${cartItemCount()===0?"translate-y-24 opacity-0":"translate-y-0 opacity-100"}">
-      <button onclick="openCart()" class="w-full btn-primary py-4 rounded-2xl font-semibold text-base flex items-center justify-between px-5 shadow-xl">
-        <div class="flex items-center gap-2">
+    <!-- ===== CART FAB ===== -->
+    <div id="cart-fab" class="fixed bottom-6 left-4 right-4 z-30 transition-all duration-300 ${cartItemCount()===0?"translate-y-24 opacity-0 pointer-events-none":"translate-y-0 opacity-100"}">
+      <button onclick="openCart()" class="w-full btn-primary py-4 rounded-2xl font-semibold text-base flex items-center justify-between px-5 shadow-2xl shadow-amber-900/30">
+        <div class="flex items-center gap-2.5">
           <div class="bg-white/20 rounded-lg w-7 h-7 flex items-center justify-center">
             <span class="text-sm font-bold" id="cart-qty">${cartItemCount()}</span>
           </div>
           <span>Lihat Keranjang</span>
         </div>
-        <span id="cart-total-fab">${formatCurrency(cartTotal())}</span>
+        <span id="cart-total-fab" class="font-mono font-bold">${fmt(cartTotal())}</span>
       </button>
     </div>
 
-    <!-- Cart Drawer Backdrop -->
-    <div id="cart-backdrop" onclick="closeCart()" class="fixed inset-0 bg-black/40 z-40 transition-opacity duration-300 ${cartOpen?"opacity-100":"opacity-0 pointer-events-none"}"></div>
+    <!-- ===== BACKDROP ===== -->
+    <div id="cart-backdrop" onclick="closeCart()" class="fixed inset-0 bg-black/40 z-40 transition-opacity duration-300 opacity-0 pointer-events-none"></div>
 
-    <!-- Cart Drawer -->
-    <div id="cart-drawer" class="fixed bottom-0 left-0 right-0 z-50 bg-white rounded-t-3xl shadow-2xl transition-transform duration-300 ${cartOpen?"translate-y-0":"translate-y-full"}" style="max-height:85vh;overflow-y:auto;">
-      <div class="sticky top-0 bg-white px-5 pt-4 pb-3 border-b border-earth-100">
+    <!-- ===== CART DRAWER ===== -->
+    <div id="cart-drawer" class="fixed bottom-0 left-0 right-0 z-50 bg-white rounded-t-3xl shadow-2xl transition-transform duration-300 translate-y-full" style="max-height:85vh;overflow-y:auto;">
+      <div class="sticky top-0 bg-white px-5 pt-4 pb-3 border-b border-earth-100 z-10">
         <div class="w-10 h-1 bg-earth-200 rounded-full mx-auto mb-3"></div>
         <div class="flex items-center justify-between">
-          <div class="font-display font-bold text-earth-900 text-lg">Keranjang</div>
-          <button onclick="closeCart()" class="text-earth-400 text-2xl leading-none">×</button>
+          <div>
+            <div class="font-display font-bold text-earth-900 text-lg leading-none">Keranjang</div>
+            <div class="text-earth-400 text-xs">Sawah Senja</div>
+          </div>
+          <button onclick="closeCart()" class="text-earth-400 text-2xl leading-none w-8 h-8 flex items-center justify-center">×</button>
         </div>
       </div>
-
-      <div id="cart-items-list" class="px-5 py-4 space-y-3">
-        ${renderCartItems()}
-      </div>
-
-      ${cartItemCount() > 0 ? `
-      <div class="px-5 pb-6 pt-2 border-t border-earth-100">
-        <div class="space-y-2 mb-4">
-          <div class="flex justify-between text-sm text-earth-500">
-            <span>Subtotal</span><span>${formatCurrency(cartSubtotal())}</span>
-          </div>
-          <div class="flex justify-between text-sm text-earth-500">
-            <span>Service fee</span><span>${formatCurrency(SERVICE_FEE)}</span>
-          </div>
-          <div class="flex justify-between font-bold text-earth-900 text-base">
-            <span>Total</span><span>${formatCurrency(cartTotal())}</span>
-          </div>
-        </div>
-        <button onclick="goToCheckout()" class="btn-primary w-full py-4 rounded-2xl font-semibold text-base">
-          Lanjut Checkout
-        </button>
-      </div>` : `
-      <div class="py-12 text-center">
-        <div class="text-5xl mb-3">🧺</div>
-        <div class="text-earth-500 text-sm">Keranjang masih kosong</div>
-      </div>`}
+      <div id="cart-items-list" class="px-5 py-4 space-y-3"></div>
+      <div id="cart-footer" class="px-5 pb-6 pt-2 border-t border-earth-100"></div>
     </div>
 
   </div>`;
 }
 
+// ============================================================
+// MENU CARD
+// ============================================================
 function renderMenuCard(item) {
-  const inCart = cart[item.id];
+  const id     = item.id;
+  const inCart = cart[id];
   return `
-  <div class="rounded-2xl overflow-hidden bg-white shadow-sm border border-earth-100 ${!item.stock?"opacity-60":""}">
+  <div class="rounded-2xl overflow-hidden bg-white shadow-sm border border-earth-100 transition-all ${!item.stock?"opacity-60":"hover:shadow-md"}">
     <div class="relative">
-      <img src="${item.image}" alt="${item.name}" class="w-full h-32 object-cover" loading="lazy" />
-      ${item.bestSeller ? `<span class="absolute top-2 left-2 bg-amber-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">🔥 Best</span>` : ""}
+      <img src="${item.image||""}" alt="${item.name}" class="w-full h-32 object-cover" loading="lazy" onerror="this.style.background='#ede8db'" />
+      ${item.bestSeller ? `<span class="absolute top-2 left-2 bg-amber-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full shadow">🔥 Best</span>` : ""}
       ${!item.stock ? `<div class="absolute inset-0 bg-white/60 flex items-center justify-center"><span class="bg-white text-earth-500 text-xs font-semibold px-3 py-1 rounded-full shadow">Habis</span></div>` : ""}
-      <div class="absolute top-2 right-2 bg-white/80 backdrop-blur-sm text-earth-600 text-[10px] font-medium px-1.5 py-0.5 rounded-full">~${item.prepTime}m</div>
+      ${item.prepTime ? `<div class="absolute top-2 right-2 bg-black/30 backdrop-blur-sm text-white text-[10px] font-medium px-1.5 py-0.5 rounded-full">~${item.prepTime}m</div>` : ""}
     </div>
     <div class="p-3">
       <div class="text-sm font-semibold text-earth-900 leading-tight mb-0.5 line-clamp-1">${item.name}</div>
-      <div class="text-xs text-earth-400 mb-2 line-clamp-1">${item.description}</div>
+      <div class="text-xs text-earth-400 mb-2 line-clamp-1">${item.description||""}</div>
       <div class="flex items-center justify-between">
-        <div class="text-sm font-bold text-amber-700">${formatCurrency(item.price)}</div>
+        <div class="text-sm font-bold text-amber-700">${fmt(item.price)}</div>
         ${item.stock ? (inCart
           ? `<div class="flex items-center gap-1.5">
-              <button onclick="removeFromCart(${item.id})" class="w-6 h-6 rounded-lg bg-earth-100 text-earth-700 flex items-center justify-center font-bold text-base leading-none">−</button>
+              <button onclick="removeFromCart('${id}')" class="w-6 h-6 rounded-lg bg-earth-100 text-earth-700 flex items-center justify-center font-bold text-base leading-none active:scale-90 transition-transform">−</button>
               <span class="font-mono font-bold text-earth-900 text-sm w-5 text-center">${inCart.qty}</span>
-              <button onclick="addToCart(${item.id})" class="w-6 h-6 rounded-lg bg-amber-500 text-white flex items-center justify-center font-bold text-base leading-none">+</button>
+              <button onclick="addToCart('${id}')" class="w-6 h-6 rounded-lg bg-amber-500 text-white flex items-center justify-center font-bold text-base leading-none active:scale-90 transition-transform">+</button>
             </div>`
-          : `<button onclick="addToCart(${item.id})" class="btn-sm-primary px-3 py-1.5 rounded-xl text-xs font-semibold">+ Tambah</button>`
+          : `<button onclick="addToCart('${id}')" class="btn-sm-primary px-3 py-1.5 rounded-xl text-xs font-semibold active:scale-95 transition-transform">+ Tambah</button>`
         ) : ""}
       </div>
     </div>
   </div>`;
 }
 
-function renderCartItems() {
+// ============================================================
+// CART ITEMS HTML
+// ============================================================
+function renderCartItemsHTML() {
   const items = Object.values(cart);
   if (items.length === 0) return "";
   return items.map(i => `
     <div class="flex gap-3 items-start">
-      <img src="${i.image}" class="w-14 h-14 rounded-xl object-cover flex-shrink-0" />
+      <img src="${i.image||""}" class="w-14 h-14 rounded-xl object-cover flex-shrink-0 bg-earth-100" onerror="this.style.background='#ede8db'" />
       <div class="flex-1 min-w-0">
         <div class="text-sm font-semibold text-earth-900 line-clamp-1">${i.name}</div>
-        <div class="text-xs font-bold text-amber-700 mt-0.5">${formatCurrency(i.price)}</div>
-        <input type="text" placeholder="Catatan (opsional)…" value="${i.notes}"
-          oninput="setItemNotes(${i.id}, this.value)"
+        <div class="text-xs font-bold text-amber-700 mt-0.5">${fmt(i.price)}</div>
+        <input type="text" placeholder="Catatan (opsional)…" value="${i.notes||""}"
+          oninput="setItemNotes('${i.id}', this.value)"
           class="mt-1.5 w-full text-xs border border-earth-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-amber-400 bg-earth-50" />
         <div class="flex items-center gap-2 mt-2">
-          <button onclick="removeFromCart(${i.id}); updateCartUI();" class="w-7 h-7 rounded-lg bg-earth-100 text-earth-700 flex items-center justify-center font-bold">−</button>
+          <button onclick="removeFromCart('${i.id}')" class="w-7 h-7 rounded-lg bg-earth-100 text-earth-700 flex items-center justify-center font-bold active:scale-90 transition-transform">−</button>
           <span class="font-mono font-bold text-earth-900 w-5 text-center">${i.qty}</span>
-          <button onclick="addToCart(${i.id}); updateCartUI();" class="w-7 h-7 rounded-lg bg-amber-500 text-white flex items-center justify-center font-bold">+</button>
-          <button onclick="deleteFromCart(${i.id}); updateCartUI();" class="ml-auto text-xs text-red-400 hover:text-red-600">Hapus</button>
+          <button onclick="addToCart('${i.id}')" class="w-7 h-7 rounded-lg bg-amber-500 text-white flex items-center justify-center font-bold active:scale-90 transition-transform">+</button>
+          <button onclick="deleteFromCart('${i.id}')" class="ml-auto text-xs text-red-400 hover:text-red-600 transition-colors">Hapus</button>
         </div>
       </div>
+    </div>`).join("");
+}
+
+function renderCartFooterHTML() {
+  const count = cartItemCount();
+  if (count === 0) {
+    return `<div class="py-8 text-center"><div class="text-4xl mb-2">🌾</div><div class="text-earth-500 text-sm">Keranjang masih kosong</div></div>`;
+  }
+  return `
+    <div class="space-y-1.5 mb-4">
+      <div class="flex justify-between text-sm text-earth-500"><span>Subtotal</span><span>${fmt(cartSubtotal())}</span></div>
+      <div class="flex justify-between text-sm text-earth-500"><span>Service fee</span><span>${fmt(SERVICE_FEE)}</span></div>
+      <div class="flex justify-between font-bold text-earth-900 text-base pt-1 border-t border-earth-100"><span>Total</span><span>${fmt(cartTotal())}</span></div>
     </div>
-  `).join("");
+    <button onclick="goToCheckout()" class="btn-primary w-full py-4 rounded-2xl font-semibold text-base">
+      Lanjut Checkout
+    </button>`;
 }
 
 // ============================================================
-// UI UPDATE
+// UPDATE CART UI
 // ============================================================
 function updateCartUI() {
   const count = cartItemCount();
-  const total = cartTotal();
 
-  // FAB
   const fab = document.getElementById("cart-fab");
   if (fab) {
-    if (count === 0) { fab.classList.add("translate-y-24","opacity-0"); fab.classList.remove("translate-y-0","opacity-100"); }
-    else             { fab.classList.remove("translate-y-24","opacity-0"); fab.classList.add("translate-y-0","opacity-100"); }
+    if (count === 0) { fab.classList.add("translate-y-24","opacity-0","pointer-events-none"); fab.classList.remove("translate-y-0","opacity-100"); }
+    else             { fab.classList.remove("translate-y-24","opacity-0","pointer-events-none"); fab.classList.add("translate-y-0","opacity-100"); }
   }
   const qtyEl = document.getElementById("cart-qty");
   if (qtyEl) qtyEl.textContent = count;
   const totEl = document.getElementById("cart-total-fab");
-  if (totEl) totEl.textContent = formatCurrency(total);
+  if (totEl) totEl.textContent = fmt(cartTotal());
 
-  // Re-render menu cards (for +/- buttons)
   const grid = document.getElementById("menu-grid");
-  if (grid) grid.innerHTML = getFilteredMenu().map(item => renderMenuCard(item)).join("");
+  if (grid) grid.innerHTML = getFilteredMenu().map(renderMenuCard).join("");
 
-  // Cart drawer items
-  const list = document.getElementById("cart-items-list");
-  if (list) {
-    list.innerHTML = renderCartItems();
-    if (count === 0) closeCart();
-  }
+  const listEl = document.getElementById("cart-items-list");
+  if (listEl) listEl.innerHTML = renderCartItemsHTML();
+
+  const footEl = document.getElementById("cart-footer");
+  if (footEl) footEl.innerHTML = renderCartFooterHTML();
+
+  if (count === 0) closeCart();
 }
 
-function openCart()  { cartOpen = true;  document.getElementById("cart-drawer")?.classList.remove("translate-y-full"); document.getElementById("cart-drawer")?.classList.add("translate-y-0"); document.getElementById("cart-backdrop")?.classList.remove("opacity-0","pointer-events-none"); document.getElementById("cart-backdrop")?.classList.add("opacity-100"); }
-function closeCart() { cartOpen = false; document.getElementById("cart-drawer")?.classList.add("translate-y-full"); document.getElementById("cart-drawer")?.classList.remove("translate-y-0"); document.getElementById("cart-backdrop")?.classList.add("opacity-0","pointer-events-none"); document.getElementById("cart-backdrop")?.classList.remove("opacity-100"); }
-function goToCheckout() { if (cartItemCount()===0) return; checkoutStep = "checkout"; renderApp(); }
-function backToMenu()   { checkoutStep = "menu"; renderApp(); }
-function resetApp()     { checkoutStep = "menu"; lastOrder = null; cart = {}; renderApp(); }
-function setCategory(c) { activeCategory = c; document.getElementById("menu-grid").innerHTML = getFilteredMenu().map(item => renderMenuCard(item)).join(""); document.querySelectorAll(".tab-btn").forEach(b => { b.classList.toggle("tab-active", b.dataset.cat === c); b.classList.toggle("tab-inactive", b.dataset.cat !== c); }); }
+// ============================================================
+// CART OPEN / CLOSE
+// ============================================================
+function openCart() {
+  cartOpen = true;
+  document.getElementById("cart-drawer")?.classList.replace("translate-y-full","translate-y-0");
+  const bd = document.getElementById("cart-backdrop");
+  bd?.classList.remove("opacity-0","pointer-events-none");
+  bd?.classList.add("opacity-100");
+}
+
+function closeCart() {
+  cartOpen = false;
+  document.getElementById("cart-drawer")?.classList.replace("translate-y-0","translate-y-full");
+  const bd = document.getElementById("cart-backdrop");
+  bd?.classList.add("opacity-0","pointer-events-none");
+  bd?.classList.remove("opacity-100");
+}
+
+function goToCheckout() {
+  if (cartItemCount() === 0) return;
+  closeCart();
+  checkoutStep = "checkout";
+  renderApp();
+}
+
+function backToMenu()  { checkoutStep = "menu";  renderApp(); }
+function resetApp()    { checkoutStep = "menu"; lastOrder = null; cart = {}; renderApp(); }
+
+function setCategory(c) {
+  activeCategory = c;
+  const grid = document.getElementById("menu-grid");
+  if (grid) grid.innerHTML = getFilteredMenu().map(renderMenuCard).join("");
+  document.querySelectorAll(".tab-btn").forEach(b => b.classList.toggle("tab-active", b.dataset.cat === c));
+}
 
 // ============================================================
-// BIND EVENTS (only needed for checkout page)
+// CHECKOUT EVENTS
 // ============================================================
-function bindMenuEvents() {}
 function bindCheckoutEvents() {
-  window.handleSubmitOrder = async function() {
+  window.handleSubmitOrder = async () => {
     const name = document.getElementById("inp-name")?.value.trim();
     const wa   = document.getElementById("inp-wa")?.value.trim();
     const pm   = document.querySelector("input[name='payment']:checked")?.value || "QRIS";
-    if (!name) { showToast("Nama harus diisi", "error"); return; }
-    if (!wa || wa.length < 8) { showToast("WhatsApp harus diisi dengan benar", "error"); return; }
+    if (!name)            { showToast("Nama harus diisi", "error"); return; }
+    if (!wa||wa.length<8) { showToast("Nomor WhatsApp tidak valid", "error"); return; }
     await submitOrder(name, wa, pm);
   };
 }
 
 // ============================================================
-// INIT
+// EXPOSE GLOBALS
 // ============================================================
 window.addToCart      = addToCart;
 window.removeFromCart = removeFromCart;
@@ -627,7 +717,11 @@ window.backToMenu     = backToMenu;
 window.resetApp       = resetApp;
 window.setCategory    = setCategory;
 
+// ============================================================
+// INIT
+// ============================================================
 document.addEventListener("DOMContentLoaded", () => {
+  startMenuListener();
   renderApp();
 });
 </script>
@@ -638,9 +732,10 @@ document.addEventListener("DOMContentLoaded", () => {
     --font-mono: 'DM Mono', monospace;
     --font-body: 'DM Sans', sans-serif;
     --cream: #f7f2e8;
-    --earth-50: #faf7f0;
+    --earth-50:  #faf7f0;
     --earth-100: #ede8db;
     --earth-200: #ddd4c2;
+    --earth-300: #c8bba5;
     --earth-400: #9c8e78;
     --earth-500: #7a6e5c;
     --earth-700: #4a4035;
@@ -653,6 +748,7 @@ document.addEventListener("DOMContentLoaded", () => {
     background: var(--cream);
     color: var(--earth-800);
     -webkit-tap-highlight-color: transparent;
+    overscroll-behavior: none;
   }
   .font-display { font-family: var(--font-display); }
   .font-mono    { font-family: var(--font-mono); }
@@ -661,7 +757,7 @@ document.addEventListener("DOMContentLoaded", () => {
   .card-warm {
     background: #fff;
     border: 1px solid var(--earth-100);
-    box-shadow: 0 2px 12px rgba(80,60,40,0.06);
+    box-shadow: 0 2px 16px rgba(80,60,40,0.07);
   }
 
   .input-field {
@@ -674,23 +770,28 @@ document.addEventListener("DOMContentLoaded", () => {
     background: var(--earth-50);
     color: var(--earth-900);
     outline: none;
-    transition: border-color 0.15s;
+    transition: border-color 0.15s, box-shadow 0.15s;
   }
-  .input-field:focus { border-color: #d97706; }
+  .input-field:focus {
+    border-color: #d97706;
+    box-shadow: 0 0 0 3px rgba(217,119,6,0.12);
+  }
 
+  /* Sawah Senja primary — warm amber-brown */
   .btn-primary {
-    background: linear-gradient(135deg, #b45309, #d97706);
+    background: linear-gradient(135deg, #92400e 0%, #b45309 50%, #d97706 100%);
     color: #fff;
     font-family: var(--font-body);
     cursor: pointer;
     border: none;
     transition: all 0.15s;
     -webkit-tap-highlight-color: transparent;
+    box-shadow: 0 4px 16px rgba(180,83,9,0.25);
   }
-  .btn-primary:active { transform: scale(0.97); }
+  .btn-primary:active { transform: scale(0.97); box-shadow: none; }
 
   .btn-sm-primary {
-    background: #d97706;
+    background: #b45309;
     color: #fff;
     font-family: var(--font-body);
     cursor: pointer;
@@ -700,15 +801,16 @@ document.addEventListener("DOMContentLoaded", () => {
 
   .tab-btn {
     font-family: var(--font-body);
-    border: 1.5px solid transparent;
+    border: 1.5px solid var(--earth-100);
     background: #fff;
     color: var(--earth-500);
     cursor: pointer;
+    transition: all 0.15s;
   }
   .tab-active {
-    background: #d97706 !important;
+    background: #92400e !important;
     color: #fff !important;
-    border-color: #b45309 !important;
+    border-color: #78350f !important;
   }
 
   .line-clamp-1 {
@@ -718,9 +820,7 @@ document.addEventListener("DOMContentLoaded", () => {
     overflow: hidden;
   }
 
-  .safe-bottom {
-    padding-bottom: max(16px, env(safe-area-inset-bottom));
-  }
+  .safe-bottom { padding-bottom: max(16px, env(safe-area-inset-bottom)); }
 
   ::-webkit-scrollbar { height: 3px; width: 3px; }
   ::-webkit-scrollbar-track { background: transparent; }
