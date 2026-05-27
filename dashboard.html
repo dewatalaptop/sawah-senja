@@ -3,20 +3,21 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Picnic — Counter Dashboard</title>
+<title>Sawah Senja — Dashboard</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@600;700;800&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet" />
 
-<!-- Firebase Modular SDK v10 -->
 <script type="module">
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import {
-  getFirestore, collection, onSnapshot, doc, updateDoc, query,
-  where, orderBy, Timestamp, serverTimestamp, getDoc
-} from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { initializeApp }                      from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getAuth, signInWithEmailAndPassword,
+         signOut, onAuthStateChanged }         from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+import { getFirestore, collection, onSnapshot,
+         doc, updateDoc, setDoc, deleteDoc,
+         query, where, orderBy,
+         Timestamp, serverTimestamp, getDocs } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
 // ============================================================
-// FIREBASE CONFIG — isi dengan config project Anda
+// FIREBASE CONFIG
 // ============================================================
 const firebaseConfig = {
   apiKey: "",
@@ -27,97 +28,170 @@ const firebaseConfig = {
   appId: ""
 };
 
-const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
+const app  = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db   = getFirestore(app);
 
 // ============================================================
-// STATE
+// STATE — App
 // ============================================================
-let allOrders = [];
-let activeFilter = "ALL";
-let searchQuery = "";
-let unsubscribe = null;
+let allOrders     = [];
+let activeFilter  = "ALL";
+let searchQuery   = "";
+let unsubscribe   = null;
+let menuUnsubscribe = null;
 let knownOrderIds = new Set();
-let audioCtx = null;
+let audioCtx      = null;
+let menuItems     = [];
+let activeTab     = "orders";
+let menuEditTarget  = null;
+let menuModalOpen   = false;
+let currentUser     = null;  // Firebase user object
 
 // ============================================================
-// HELPER FUNCTIONS
+// HELPERS
 // ============================================================
-function formatCurrency(n) {
-  return "Rp " + Number(n).toLocaleString("id-ID");
-}
+const fmt = n  => "Rp " + Number(n).toLocaleString("id-ID");
 
-function formatTime(ts) {
+function fmtTime(ts) {
   if (!ts) return "-";
   const d = ts.toDate ? ts.toDate() : new Date(ts);
   return d.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
 }
 
-function formatDate(ts) {
-  if (!ts) return "-";
-  const d = ts.toDate ? ts.toDate() : new Date(ts);
-  return d.toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" });
-}
-
-function elapsedMinutes(ts) {
+function elapsedMin(ts) {
   if (!ts) return 0;
   const d = ts.toDate ? ts.toDate() : new Date(ts);
   return Math.floor((Date.now() - d.getTime()) / 60000);
 }
 
-function statusOrder(s) {
-  const map = { NEW: 0, COOKING: 1, READY: 2, DONE: 3 };
-  return map[s] ?? 99;
-}
+const STATUS_ORDER = { NEW: 0, COOKING: 1, READY: 2, DONE: 3 };
+const STATUS_LABEL = { NEW: "Baru", COOKING: "Masak", READY: "Siap", DONE: "Selesai" };
 
-function getStatusLabel(s) {
-  const map = { NEW: "Baru", COOKING: "Masak", READY: "Siap", DONE: "Selesai" };
-  return map[s] ?? s;
-}
-
-function getStatusColorClass(s) {
+function statusColorCls(s) {
   if (s === "NEW")     return "text-red-400 bg-red-400/10 border-red-400/30";
   if (s === "COOKING") return "text-amber-400 bg-amber-400/10 border-amber-400/30";
   if (s === "READY")   return "text-emerald-400 bg-emerald-400/10 border-emerald-400/30";
-  if (s === "DONE")    return "text-zinc-400 bg-zinc-400/10 border-zinc-400/30";
-  return "text-zinc-400";
+  return "text-zinc-400 bg-zinc-400/10 border-zinc-400/30";
 }
 
-function getCardBorderClass(s) {
+function cardBorderCls(s) {
   if (s === "NEW")     return "border-red-500/40";
   if (s === "COOKING") return "border-amber-500/40";
   if (s === "READY")   return "border-emerald-500/40";
-  if (s === "DONE")    return "border-zinc-700/40";
   return "border-zinc-700/40";
 }
 
 // ============================================================
-// AUDIO NOTIFICATION
+// AUDIO
 // ============================================================
-function playNewOrderSound() {
+function playChime() {
   try {
     if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const freqs = [523, 659, 784];
-    freqs.forEach((freq, i) => {
+    [523, 659, 784].forEach((freq, i) => {
       const osc = audioCtx.createOscillator();
-      const gain = audioCtx.createGain();
-      osc.connect(gain);
-      gain.connect(audioCtx.destination);
-      osc.frequency.value = freq;
-      osc.type = "sine";
-      gain.gain.setValueAtTime(0, audioCtx.currentTime + i * 0.15);
-      gain.gain.linearRampToValueAtTime(0.3, audioCtx.currentTime + i * 0.15 + 0.05);
-      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + i * 0.15 + 0.4);
-      osc.start(audioCtx.currentTime + i * 0.15);
-      osc.stop(audioCtx.currentTime + i * 0.15 + 0.4);
+      const g   = audioCtx.createGain();
+      osc.connect(g); g.connect(audioCtx.destination);
+      osc.frequency.value = freq; osc.type = "sine";
+      const t = audioCtx.currentTime + i * 0.15;
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(0.3, t + 0.05);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.4);
+      osc.start(t); osc.stop(t + 0.4);
     });
   } catch(e) {}
 }
 
 // ============================================================
-// FIREBASE — Realtime listener
+// AUTH — State observer (gerbang utama app)
 // ============================================================
-function startListener() {
+onAuthStateChanged(auth, user => {
+  currentUser = user;
+  if (user) {
+    showApp();
+    startListeners();
+  } else {
+    stopListeners();
+    showLoginScreen();
+  }
+});
+
+// ============================================================
+// AUTH — Login
+// ============================================================
+async function doLogin() {
+  const email    = document.getElementById("inp-email")?.value.trim();
+  const password = document.getElementById("inp-password")?.value;
+  const btn      = document.getElementById("btn-login");
+  const errEl    = document.getElementById("login-error");
+
+  if (!email || !password) {
+    errEl.textContent = "Email dan password harus diisi.";
+    errEl.style.display = "block";
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = "Masuk…";
+  errEl.style.display = "none";
+
+  try {
+    await signInWithEmailAndPassword(auth, email, password);
+    // onAuthStateChanged akan handle selanjutnya
+  } catch(e) {
+    btn.disabled = false;
+    btn.textContent = "Masuk";
+    const msgs = {
+      "auth/invalid-credential":      "Email atau password salah.",
+      "auth/user-not-found":          "Akun tidak ditemukan.",
+      "auth/wrong-password":          "Password salah.",
+      "auth/too-many-requests":       "Terlalu banyak percobaan. Coba lagi nanti.",
+      "auth/network-request-failed":  "Periksa koneksi internet Anda.",
+    };
+    errEl.textContent = msgs[e.code] || "Login gagal. Periksa kembali kredensial Anda.";
+    errEl.style.display = "block";
+  }
+}
+
+async function doLogout() {
+  if (!confirm("Keluar dari Sawah Senja Dashboard?")) return;
+  await signOut(auth);
+}
+
+// ============================================================
+// AUTH — Screens
+// ============================================================
+function showLoginScreen() {
+  document.getElementById("screen-login").style.display = "flex";
+  document.getElementById("screen-app").style.display   = "none";
+  document.getElementById("inp-email")?.focus();
+}
+
+function showApp() {
+  document.getElementById("screen-login").style.display = "none";
+  document.getElementById("screen-app").style.display   = "block";
+
+  // Tampilkan info user di header
+  const emailEl = document.getElementById("hdr-user-email");
+  if (emailEl && currentUser) emailEl.textContent = currentUser.email;
+
+  startClock();
+}
+
+// ============================================================
+// LISTENERS
+// ============================================================
+function startListeners() {
+  startOrdersListener();
+  startMenuListener();
+}
+
+function stopListeners() {
+  if (unsubscribe)     { unsubscribe();     unsubscribe     = null; }
+  if (menuUnsubscribe) { menuUnsubscribe(); menuUnsubscribe = null; }
+}
+
+function startOrdersListener() {
   if (unsubscribe) unsubscribe();
 
   const today = new Date();
@@ -130,45 +204,49 @@ function startListener() {
     orderBy("createdAt", "desc")
   );
 
-  unsubscribe = onSnapshot(q, (snapshot) => {
+  unsubscribe = onSnapshot(q, snap => {
     const orders = [];
     let hasNew = false;
-
-    snapshot.forEach(docSnap => {
-      const data = { id: docSnap.id, ...docSnap.data() };
+    snap.forEach(d => {
+      const data = { id: d.id, ...d.data() };
       orders.push(data);
-
-      if (!knownOrderIds.has(docSnap.id) && knownOrderIds.size > 0) {
-        hasNew = true;
-      }
-      knownOrderIds.add(docSnap.id);
+      if (!knownOrderIds.has(d.id) && knownOrderIds.size > 0) hasNew = true;
+      knownOrderIds.add(d.id);
     });
-
-    if (hasNew) playNewOrderSound();
-
+    if (hasNew) playChime();
     allOrders = orders;
-    renderAll();
-  }, (err) => {
-    console.error("Listener error:", err);
+    renderHeaderStats();
+    renderFilterBadges();
+    if (activeTab === "orders") renderOrders();
+  }, err => {
+    console.error("Orders listener:", err);
+    document.getElementById("skeleton-state")?.classList.add("hidden");
     showToast("Error koneksi Firestore", "error");
   });
 }
 
+function startMenuListener() {
+  if (menuUnsubscribe) menuUnsubscribe();
+  menuUnsubscribe = onSnapshot(
+    query(collection(db, "menu"), orderBy("category"), orderBy("name")),
+    snap => {
+      menuItems = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      if (activeTab === "menu") renderMenuManager();
+    },
+    err => { console.error("Menu listener:", err); showToast("Error load menu", "error"); }
+  );
+}
+
 // ============================================================
-// UPDATE STATUS
+// ORDER STATUS
 // ============================================================
 async function updateStatus(orderId, newStatus) {
   try {
-    const ref = doc(db, "orders", orderId);
-    const updateData = {
-      orderStatus: newStatus,
-      updatedAt: serverTimestamp()
-    };
-    if (newStatus === "READY")  updateData.readyAt = serverTimestamp();
-    if (newStatus === "DONE")   updateData.completedAt = serverTimestamp();
-
-    await updateDoc(ref, updateData);
-    showToast(`Order diupdate → ${getStatusLabel(newStatus)}`, "success");
+    const data = { orderStatus: newStatus, updatedAt: serverTimestamp() };
+    if (newStatus === "READY") data.readyAt = serverTimestamp();
+    if (newStatus === "DONE")  data.completedAt = serverTimestamp();
+    await updateDoc(doc(db, "orders", orderId), data);
+    showToast(`Order → ${STATUS_LABEL[newStatus] || newStatus}`, "success");
   } catch(e) {
     showToast("Gagal update status", "error");
   }
@@ -179,27 +257,24 @@ async function updateStatus(orderId, newStatus) {
 // ============================================================
 function sendWhatsApp(order) {
   const phone = String(order.customerWhatsapp).replace(/\D/g, "");
-  const msg = encodeURIComponent(
-    `Halo ${order.customerName} 👋\nPesanan Anda dengan nomor *${order.orderId}* sudah siap diambil di pickup counter.\nTerima kasih 🙏`
+  const msg   = encodeURIComponent(
+    `Halo ${order.customerName} 👋\nPesanan Anda nomor *${order.orderId}* sudah siap diambil.\nTerima kasih — Sawah Senja 🌾`
   );
   window.open(`https://wa.me/${phone}?text=${msg}`, "_blank");
-
-  // Mark whatsappSent
-  const ref = doc(db, "orders", order.id);
-  updateDoc(ref, { whatsappSent: true }).catch(() => {});
+  updateDoc(doc(db, "orders", order.id), { whatsappSent: true }).catch(() => {});
 }
 
 // ============================================================
 // ANALYTICS
 // ============================================================
 function calcAnalytics() {
-  const active = allOrders.filter(o => o.orderStatus !== "DONE");
-  const done   = allOrders.filter(o => o.orderStatus === "DONE");
-  const total  = allOrders.length;
+  const total   = allOrders.length;
+  const active  = allOrders.filter(o => o.orderStatus !== "DONE").length;
   const revenue = allOrders.reduce((s, o) => s + (o.total || 0), 0);
-  const avg    = total ? Math.round(revenue / total) : 0;
-  const items  = allOrders.reduce((s, o) => s + (o.items || []).reduce((a, i) => a + (i.qty || 0), 0), 0);
-  return { total, revenue, avg, items, active: active.length };
+  const avg     = total ? Math.round(revenue / total) : 0;
+  const items   = allOrders.reduce((s, o) =>
+    s + (o.items || []).reduce((a, i) => a + (i.qty || 0), 0), 0);
+  return { total, revenue, avg, items, active };
 }
 
 // ============================================================
@@ -207,11 +282,7 @@ function calcAnalytics() {
 // ============================================================
 function getFilteredOrders() {
   let list = [...allOrders];
-
-  if (activeFilter !== "ALL") {
-    list = list.filter(o => o.orderStatus === activeFilter);
-  }
-
+  if (activeFilter !== "ALL") list = list.filter(o => o.orderStatus === activeFilter);
   if (searchQuery.trim()) {
     const q = searchQuery.toLowerCase();
     list = list.filter(o =>
@@ -220,41 +291,33 @@ function getFilteredOrders() {
       (o.areaCode || "").toLowerCase().includes(q)
     );
   }
-
-  // Sort: NEW > COOKING > READY > DONE, then by time desc
   list.sort((a, b) => {
-    const sd = statusOrder(a.orderStatus) - statusOrder(b.orderStatus);
+    const sd = (STATUS_ORDER[a.orderStatus] ?? 99) - (STATUS_ORDER[b.orderStatus] ?? 99);
     if (sd !== 0) return sd;
     const ta = a.createdAt?.toDate?.() ?? new Date(0);
     const tb = b.createdAt?.toDate?.() ?? new Date(0);
     return tb - ta;
   });
-
   return list;
 }
 
 function countByStatus(s) {
-  return allOrders.filter(o => s === "ALL" ? true : o.orderStatus === s).length;
+  return allOrders.filter(o => s === "ALL" || o.orderStatus === s).length;
 }
 
 // ============================================================
-// RENDER
+// RENDER — HEADER STATS
 // ============================================================
-function renderAll() {
-  renderAnalytics();
-  renderFilterBadges();
-  renderOrders();
-}
-
-function renderAnalytics() {
+function renderHeaderStats() {
   const a = calcAnalytics();
-  document.getElementById("stat-total").textContent = a.total;
-  document.getElementById("stat-revenue").textContent = formatCurrency(a.revenue);
-  document.getElementById("stat-avg").textContent = formatCurrency(a.avg);
-  document.getElementById("stat-items").textContent = a.items;
-  document.getElementById("hdr-orders").textContent = a.total + " order";
-  document.getElementById("hdr-revenue").textContent = formatCurrency(a.revenue);
-  document.getElementById("hdr-active").textContent = a.active + " aktif";
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  set("stat-total",      a.total);
+  set("stat-revenue",    fmt(a.revenue));
+  set("stat-avg",        fmt(a.avg));
+  set("stat-items",      a.items);
+  set("hdr-orders",      a.total + " order");
+  set("hdr-revenue",     fmt(a.revenue));
+  set("hdr-active-num",  a.active + " aktif");
 }
 
 function renderFilterBadges() {
@@ -264,52 +327,46 @@ function renderFilterBadges() {
   });
 }
 
+// ============================================================
+// RENDER — ORDERS
+// ============================================================
 function renderOrders() {
-  const grid = document.getElementById("orders-grid");
-  const empty = document.getElementById("empty-state");
+  const grid     = document.getElementById("orders-grid");
+  const empty    = document.getElementById("empty-state");
   const skeleton = document.getElementById("skeleton-state");
+  if (!grid) return;
 
-  skeleton.classList.add("hidden");
-
+  skeleton?.classList.add("hidden");
   const list = getFilteredOrders();
 
   if (list.length === 0) {
     grid.innerHTML = "";
-    empty.classList.remove("hidden");
+    empty.style.display = "flex";
     return;
   }
-  empty.classList.add("hidden");
+  empty.style.display = "none";
+  grid.innerHTML = list.map(buildCard).join("");
 
-  grid.innerHTML = list.map(order => buildCard(order)).join("");
-
-  // Bind events
   grid.querySelectorAll("[data-action]").forEach(btn => {
     btn.addEventListener("click", () => {
-      const action = btn.dataset.action;
-      const id     = btn.dataset.id;
-      const order  = allOrders.find(o => o.id === id);
+      const { action, id } = btn.dataset;
+      const order = allOrders.find(o => o.id === id);
       if (!order) return;
-
-      if (action === "start-cooking")   updateStatus(id, "COOKING");
-      if (action === "mark-ready")      updateStatus(id, "READY");
-      if (action === "complete-order")  updateStatus(id, "DONE");
-      if (action === "send-wa")         sendWhatsApp(order);
+      if (action === "start-cooking")  updateStatus(id, "COOKING");
+      if (action === "mark-ready")     updateStatus(id, "READY");
+      if (action === "complete-order") updateStatus(id, "DONE");
+      if (action === "send-wa")        sendWhatsApp(order);
     });
   });
 }
 
 function buildCard(o) {
-  const elapsed = elapsedMinutes(o.createdAt);
-  const border  = getCardBorderClass(o.orderStatus);
-  const scls    = getStatusColorClass(o.orderStatus);
-  const slabel  = getStatusLabel(o.orderStatus);
-
-  const itemsHtml = (o.items || []).map(item => `
+  const elapsed = elapsedMin(o.createdAt);
+  const itemsHtml = (o.items || []).map(i => `
     <div class="flex justify-between text-xs">
-      <span class="text-zinc-300">${item.qty}x <span class="font-medium">${item.name}</span>${item.notes ? ` <span class="text-zinc-500 italic">(${item.notes})</span>` : ""}</span>
-      <span class="text-zinc-400">${formatCurrency(item.price * item.qty)}</span>
-    </div>
-  `).join("");
+      <span class="text-zinc-300">${i.qty}x <span class="font-medium">${i.name}</span>${i.notes ? ` <span class="text-zinc-500 italic">(${i.notes})</span>` : ""}</span>
+      <span class="text-zinc-400">${fmt((i.price||0)*(i.qty||0))}</span>
+    </div>`).join("");
 
   let actionBtn = "";
   if (o.orderStatus === "NEW")
@@ -319,82 +376,239 @@ function buildCard(o) {
   else if (o.orderStatus === "READY")
     actionBtn = `<button data-action="complete-order" data-id="${o.id}" class="action-btn bg-zinc-600 hover:bg-zinc-500 text-white font-semibold text-xs py-2 px-4 rounded-lg transition-all active:scale-95">✓ Selesaikan</button>`;
 
-  const waBtn = (o.orderStatus === "READY")
-    ? `<button data-action="send-wa" data-id="${o.id}" class="action-btn flex items-center gap-1 bg-green-600 hover:bg-green-500 text-white font-semibold text-xs py-2 px-3 rounded-lg transition-all active:scale-95${o.whatsappSent ? " opacity-50" : ""}">
+  const waBtn = o.orderStatus === "READY"
+    ? `<button data-action="send-wa" data-id="${o.id}" class="action-btn flex items-center gap-1 bg-green-600 hover:bg-green-500 text-white font-semibold text-xs py-2 px-3 rounded-lg transition-all active:scale-95${o.whatsappSent?" opacity-50":""}">
         <svg class="w-3 h-3" fill="currentColor" viewBox="0 0 24 24"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/><path d="M12 0C5.373 0 0 5.373 0 12c0 2.127.558 4.126 1.533 5.858L0 24l6.335-1.502A11.955 11.955 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 22c-1.853 0-3.585-.5-5.082-1.373l-.362-.217-3.761.892.952-3.669-.239-.381A9.955 9.955 0 012 12C2 6.477 6.477 2 12 2s10 4.477 10 10-4.477 10-10 10z"/></svg>
         ${o.whatsappSent ? "Terkirim" : "Kirim WA"}
       </button>` : "";
 
   const payBadge = o.paymentStatus === "PAID"
-    ? `<span class="text-xs px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">PAID</span>`
+    ? `<span class="badge-pay bg-emerald-500/20 text-emerald-400 border-emerald-500/30">PAID</span>`
     : o.paymentStatus === "PENDING"
-    ? `<span class="text-xs px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-400 border border-amber-500/30">PENDING</span>`
-    : `<span class="text-xs px-2 py-0.5 rounded-full bg-zinc-700 text-zinc-400">UNPAID</span>`;
+    ? `<span class="badge-pay bg-amber-500/20 text-amber-400 border-amber-500/30">PENDING</span>`
+    : `<span class="badge-pay bg-zinc-700 text-zinc-400 border-zinc-700">UNPAID</span>`;
 
   return `
-  <div class="card-order relative rounded-2xl bg-zinc-900/80 border ${border} overflow-hidden transition-all duration-300 hover:shadow-xl hover:shadow-black/30 hover:-translate-y-0.5">
-    <!-- Status bar top -->
+  <div class="card-order relative rounded-2xl bg-zinc-900/80 border ${cardBorderCls(o.orderStatus)} overflow-hidden hover:shadow-xl hover:shadow-black/30 hover:-translate-y-0.5 transition-all duration-300">
     <div class="h-1 w-full ${o.orderStatus==="NEW"?"bg-red-500":o.orderStatus==="COOKING"?"bg-amber-500":o.orderStatus==="READY"?"bg-emerald-500":"bg-zinc-700"}"></div>
-
     <div class="p-4">
-      <!-- Header row -->
       <div class="flex items-start justify-between mb-3">
         <div>
-          <div class="font-mono text-xl font-bold text-white leading-none">${o.orderId || "-"}</div>
-          <div class="text-xs text-zinc-500 mt-0.5 font-mono">${o.areaCode || "-"} · ${formatTime(o.createdAt)}</div>
+          <div class="font-mono text-xl font-bold text-white leading-none">${o.orderId||"-"}</div>
+          <div class="text-xs text-zinc-500 mt-0.5 font-mono">${o.areaCode||"-"} · ${fmtTime(o.createdAt)}</div>
         </div>
         <div class="flex flex-col items-end gap-1">
-          <span class="text-xs px-2 py-0.5 rounded-full border ${scls} font-medium">${slabel}</span>
+          <span class="text-xs px-2 py-0.5 rounded-full border font-medium ${statusColorCls(o.orderStatus)}">${STATUS_LABEL[o.orderStatus]||o.orderStatus}</span>
           ${payBadge}
         </div>
       </div>
-
-      <!-- Customer -->
       <div class="flex items-center gap-2 mb-3">
         <div class="w-7 h-7 rounded-full bg-zinc-700 flex items-center justify-center text-xs font-bold text-white">${(o.customerName||"?")[0].toUpperCase()}</div>
         <div>
-          <div class="text-sm font-medium text-white">${o.customerName || "-"}</div>
-          <div class="text-xs text-zinc-500 font-mono">${o.customerWhatsapp || "-"}</div>
+          <div class="text-sm font-medium text-white">${o.customerName||"-"}</div>
+          <div class="text-xs text-zinc-500 font-mono">${o.customerWhatsapp||"-"}</div>
         </div>
       </div>
-
-      <!-- Items -->
-      <div class="space-y-1 mb-3 pb-3 border-b border-zinc-800">
-        ${itemsHtml}
-      </div>
-
-      <!-- Total + elapsed -->
+      <div class="space-y-1 mb-3 pb-3 border-b border-zinc-800">${itemsHtml}</div>
       <div class="flex items-center justify-between mb-3">
         <div>
           <div class="text-xs text-zinc-500">Total</div>
-          <div class="text-base font-bold text-white">${formatCurrency(o.total || 0)}</div>
+          <div class="text-base font-bold text-white">${fmt(o.total||0)}</div>
         </div>
         <div class="text-right">
           <div class="text-xs text-zinc-500">Tunggu</div>
           <div class="text-sm font-mono ${elapsed>15?"text-red-400":elapsed>8?"text-amber-400":"text-zinc-400"}">${elapsed} mnt</div>
         </div>
       </div>
-
-      <!-- Actions -->
-      <div class="flex gap-2 flex-wrap">
-        ${actionBtn}
-        ${waBtn}
-      </div>
+      <div class="flex gap-2 flex-wrap">${actionBtn}${waBtn}</div>
     </div>
   </div>`;
+}
+
+// ============================================================
+// RENDER — MENU MANAGER
+// ============================================================
+function renderMenuManager() {
+  const panel = document.getElementById("menu-manager-panel");
+  if (!panel) return;
+
+  const categories = [...new Set(menuItems.map(m => m.category))].sort();
+  const grouped    = {};
+  categories.forEach(c => { grouped[c] = menuItems.filter(m => m.category === c); });
+
+  panel.innerHTML = menuItems.length === 0
+    ? `<div class="flex flex-col items-center py-16 text-center">
+        <div class="text-4xl mb-3">🍽️</div>
+        <div class="text-zinc-400 font-medium">Belum ada item menu</div>
+        <div class="text-zinc-600 text-sm mt-1">Klik "+ Tambah Item" untuk mulai</div>
+       </div>`
+    : categories.map(cat => `
+      <div class="mb-6">
+        <div class="flex items-center gap-2 mb-3">
+          <div class="h-px flex-1 bg-zinc-800"></div>
+          <span class="text-xs font-mono font-bold text-zinc-500 uppercase tracking-widest">${cat}</span>
+          <div class="h-px flex-1 bg-zinc-800"></div>
+        </div>
+        <div class="space-y-2">${grouped[cat].map(buildMenuRow).join("")}</div>
+      </div>`).join("");
+
+  panel.querySelectorAll("[data-menu-action]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const { menuAction: action, menuId: id } = btn.dataset;
+      const item = menuItems.find(m => m.id === id);
+      if (!item) return;
+      if (action === "edit")         openMenuModal(item);
+      if (action === "toggle-stock") toggleMenuStock(item);
+      if (action === "delete")       confirmDeleteMenu(item);
+    });
+  });
+}
+
+function buildMenuRow(item) {
+  const stockBadge = item.stock
+    ? `<span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">Tersedia</span>`
+    : `<span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-500/15 text-red-400 border border-red-500/30">Habis</span>`;
+
+  return `
+  <div class="flex items-center gap-3 bg-zinc-900/60 border border-zinc-800/60 rounded-xl px-4 py-3 hover:border-zinc-700 transition-all">
+    <div class="w-10 h-10 rounded-xl overflow-hidden flex-shrink-0 bg-zinc-800">
+      ${item.image
+        ? `<img src="${item.image}" class="w-full h-full object-cover" loading="lazy" onerror="this.style.display='none'" />`
+        : `<div class="w-full h-full flex items-center justify-center text-lg">🍽️</div>`}
+    </div>
+    <div class="flex-1 min-w-0">
+      <div class="flex items-center gap-2 flex-wrap">
+        <span class="text-sm font-semibold text-white truncate">${item.name}</span>
+        ${item.bestSeller ? `<span class="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-400 border border-amber-500/30">🔥 Best</span>` : ""}
+        ${stockBadge}
+      </div>
+      <div class="flex items-center gap-3 mt-0.5">
+        <span class="text-xs font-mono font-bold text-amber-400">${fmt(item.price||0)}</span>
+        <span class="text-xs text-zinc-600">${item.category}</span>
+        ${item.prepTime ? `<span class="text-xs text-zinc-600">~${item.prepTime}m</span>` : ""}
+      </div>
+      ${item.description ? `<div class="text-xs text-zinc-600 truncate mt-0.5">${item.description}</div>` : ""}
+    </div>
+    <div class="flex items-center gap-1.5 flex-shrink-0">
+      <button data-menu-action="toggle-stock" data-menu-id="${item.id}" title="${item.stock?"Tandai Habis":"Tandai Tersedia"}"
+        class="w-8 h-8 rounded-lg bg-zinc-700 ${item.stock?"hover:bg-red-900/60 hover:text-red-400":"hover:bg-emerald-900/60 hover:text-emerald-400"} flex items-center justify-center text-zinc-400 transition-all">
+        ${item.stock
+          ? `<svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>`
+          : `<svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>`}
+      </button>
+      <button data-menu-action="edit" data-menu-id="${item.id}"
+        class="w-8 h-8 rounded-lg bg-zinc-700 hover:bg-zinc-600 flex items-center justify-center text-zinc-400 hover:text-white transition-all">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+      </button>
+      <button data-menu-action="delete" data-menu-id="${item.id}"
+        class="w-8 h-8 rounded-lg bg-zinc-700 hover:bg-red-900/60 flex items-center justify-center text-zinc-400 hover:text-red-400 transition-all">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+      </button>
+    </div>
+  </div>`;
+}
+
+// ============================================================
+// MENU CRUD
+// ============================================================
+async function toggleMenuStock(item) {
+  try {
+    await updateDoc(doc(db, "menu", item.id), { stock: !item.stock });
+    showToast(item.stock ? "Ditandai habis" : "Ditandai tersedia", "success");
+  } catch(e) { showToast("Gagal update stok", "error"); }
+}
+
+async function confirmDeleteMenu(item) {
+  if (!confirm(`Hapus "${item.name}"? Tindakan ini tidak bisa dibatalkan.`)) return;
+  try {
+    await deleteDoc(doc(db, "menu", item.id));
+    showToast(`"${item.name}" dihapus`, "info");
+  } catch(e) { showToast("Gagal hapus item", "error"); }
+}
+
+async function saveMenuItem(fd) {
+  try {
+    const payload = {
+      name:        fd.name.trim(),
+      category:    fd.category.trim(),
+      price:       parseInt(fd.price) || 0,
+      description: fd.description.trim(),
+      image:       fd.image.trim(),
+      stock:       fd.stock === "true" || fd.stock === true,
+      bestSeller:  fd.bestSeller === true,
+      prepTime:    parseInt(fd.prepTime) || 0,
+      updatedAt:   serverTimestamp(),
+    };
+    if (menuEditTarget) {
+      await updateDoc(doc(db, "menu", menuEditTarget.id), payload);
+      showToast("Item diperbarui", "success");
+    } else {
+      payload.createdAt = serverTimestamp();
+      await setDoc(doc(collection(db, "menu")), payload);
+      showToast("Item ditambahkan", "success");
+    }
+    closeMenuModal();
+  } catch(e) {
+    console.error(e);
+    showToast("Gagal simpan item", "error");
+  }
+}
+
+// ============================================================
+// MENU MODAL
+// ============================================================
+function openMenuModal(item = null) {
+  menuEditTarget = item;
+  menuModalOpen  = true;
+  document.getElementById("menu-modal-title").textContent = item ? "Edit Item Menu" : "Tambah Item Menu";
+  document.getElementById("mf-name").value        = item?.name        || "";
+  document.getElementById("mf-category").value    = item?.category    || "Makanan";
+  document.getElementById("mf-price").value       = item?.price       || "";
+  document.getElementById("mf-description").value = item?.description || "";
+  document.getElementById("mf-image").value       = item?.image       || "";
+  document.getElementById("mf-preptime").value    = item?.prepTime    || "";
+  document.getElementById("mf-stock").value       = item?.stock === false ? "false" : "true";
+  document.getElementById("mf-bestseller").checked = item?.bestSeller || false;
+
+  const modal = document.getElementById("menu-modal");
+  modal.classList.remove("hidden");
+  requestAnimationFrame(() => modal.classList.add("modal-visible"));
+  document.getElementById("mf-name").focus();
+}
+
+function closeMenuModal() {
+  const modal = document.getElementById("menu-modal");
+  modal.classList.remove("modal-visible");
+  setTimeout(() => modal.classList.add("hidden"), 200);
+  menuEditTarget = null;
+  menuModalOpen  = false;
+}
+
+// ============================================================
+// TAB SWITCH
+// ============================================================
+function switchTab(tab) {
+  activeTab = tab;
+  ["orders","menu"].forEach(t => {
+    document.getElementById("tab-"+t).classList.toggle("tab-active",   t === tab);
+    document.getElementById("tab-"+t).classList.toggle("tab-inactive", t !== tab);
+    const sec = document.getElementById(t+"-section");
+    if (sec) sec.style.display = t === tab ? "" : "none";
+  });
+  if (tab === "menu") renderMenuManager();
 }
 
 // ============================================================
 // TOAST
 // ============================================================
 function showToast(msg, type = "info") {
-  const colors = { success: "bg-emerald-600", error: "bg-red-600", info: "bg-zinc-700" };
+  const colors = { success:"bg-emerald-600", error:"bg-red-600", info:"bg-zinc-700" };
   const t = document.createElement("div");
-  t.className = `fixed bottom-6 right-4 z-50 px-4 py-2.5 rounded-xl text-white text-sm font-medium shadow-xl transition-all duration-300 translate-y-4 opacity-0 ${colors[type] || colors.info}`;
+  t.className = `fixed bottom-6 right-4 z-[9999] px-4 py-2.5 rounded-xl text-white text-sm font-medium shadow-xl transition-all duration-300 translate-y-4 opacity-0 ${colors[type]||colors.info}`;
   t.textContent = msg;
   document.body.appendChild(t);
-  requestAnimationFrame(() => t.classList.remove("translate-y-4", "opacity-0"));
-  setTimeout(() => { t.classList.add("translate-y-4", "opacity-0"); setTimeout(() => t.remove(), 300); }, 2500);
+  requestAnimationFrame(() => t.classList.remove("translate-y-4","opacity-0"));
+  setTimeout(() => { t.classList.add("translate-y-4","opacity-0"); setTimeout(() => t.remove(), 300); }, 2500);
 }
 
 // ============================================================
@@ -402,31 +616,34 @@ function showToast(msg, type = "info") {
 // ============================================================
 function startClock() {
   const el = document.getElementById("realtime-clock");
-  function tick() {
-    const now = new Date();
-    el.textContent = now.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-  }
+  if (!el || el._ticking) return;
+  el._ticking = true;
+  const tick = () => el.textContent = new Date().toLocaleTimeString("id-ID", { hour:"2-digit", minute:"2-digit", second:"2-digit" });
   tick();
   setInterval(tick, 1000);
 }
 
 // ============================================================
-// FULLSCREEN
+// INIT — hanya bind event statis; listener & auth dikelola sendiri
 // ============================================================
-function toggleFullscreen() {
-  if (!document.fullscreenElement) {
-    document.documentElement.requestFullscreen().catch(() => {});
-  } else {
-    document.exitFullscreen();
-  }
-}
+document.addEventListener("DOMContentLoaded", () => {
 
-// ============================================================
-// INIT
-// ============================================================
-function init() {
-  startClock();
-  startListener();
+  // ---- LOGIN SCREEN ----
+  document.getElementById("btn-login").addEventListener("click", doLogin);
+  document.getElementById("inp-password").addEventListener("keydown", e => {
+    if (e.key === "Enter") doLogin();
+  });
+
+  // ---- APP SCREEN ----
+  document.getElementById("btn-logout").addEventListener("click", doLogout);
+  document.getElementById("btn-refresh").addEventListener("click", () => {
+    startOrdersListener();
+    showToast("Listener di-refresh", "info");
+  });
+  document.getElementById("btn-fullscreen").addEventListener("click", () => {
+    if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {});
+    else document.exitFullscreen();
+  });
 
   // Filter tabs
   document.querySelectorAll("[data-filter]").forEach(btn => {
@@ -444,17 +661,35 @@ function init() {
     renderOrders();
   });
 
-  // Refresh
-  document.getElementById("btn-refresh").addEventListener("click", () => {
-    startListener();
-    showToast("Listener di-refresh", "info");
+  // Main tabs
+  document.getElementById("tab-orders").addEventListener("click", () => switchTab("orders"));
+  document.getElementById("tab-menu").addEventListener("click",   () => switchTab("menu"));
+
+  // Menu modal
+  document.getElementById("btn-add-menu").addEventListener("click", () => openMenuModal(null));
+  document.getElementById("btn-close-modal").addEventListener("click", closeMenuModal);
+  document.getElementById("menu-modal-backdrop").addEventListener("click", closeMenuModal);
+  document.getElementById("btn-save-menu").addEventListener("click", async () => {
+    const name  = document.getElementById("mf-name").value.trim();
+    const cat   = document.getElementById("mf-category").value.trim();
+    const price = document.getElementById("mf-price").value.trim();
+    if (!name)               { showToast("Nama item harus diisi", "error"); return; }
+    if (!cat)                { showToast("Kategori harus diisi", "error"); return; }
+    if (!price||isNaN(price)){ showToast("Harga harus berupa angka", "error"); return; }
+    await saveMenuItem({
+      name, category: cat, price,
+      description: document.getElementById("mf-description").value,
+      image:       document.getElementById("mf-image").value,
+      prepTime:    document.getElementById("mf-preptime").value,
+      stock:       document.getElementById("mf-stock").value,
+      bestSeller:  document.getElementById("mf-bestseller").checked,
+    });
   });
 
-  // Fullscreen
-  document.getElementById("btn-fullscreen").addEventListener("click", toggleFullscreen);
-}
-
-document.addEventListener("DOMContentLoaded", init);
+  document.addEventListener("keydown", e => {
+    if (e.key === "Escape" && menuModalOpen) closeMenuModal();
+  });
+});
 </script>
 
 <style>
@@ -463,115 +698,227 @@ document.addEventListener("DOMContentLoaded", init);
     --font-mono: 'DM Mono', monospace;
     --font-body: 'DM Sans', sans-serif;
   }
-  body {
-    font-family: var(--font-body);
-    background: #0a0a0b;
-    color: #e4e4e7;
-  }
+  * { box-sizing: border-box; }
+  body { font-family: var(--font-body); background: #0a0a0b; color: #e4e4e7; margin: 0; }
   .font-display { font-family: var(--font-display); }
   .font-mono    { font-family: var(--font-mono); }
 
-  /* Animated background */
+  /* ---- BACKGROUND GLOW ---- */
   body::before {
     content: "";
-    position: fixed;
-    inset: 0;
+    position: fixed; inset: 0;
     background:
       radial-gradient(ellipse 60% 40% at 20% 10%, rgba(234,88,12,0.07) 0%, transparent 60%),
       radial-gradient(ellipse 40% 50% at 80% 80%, rgba(16,185,129,0.05) 0%, transparent 60%);
-    pointer-events: none;
-    z-index: 0;
+    pointer-events: none; z-index: 0;
   }
 
-  /* Scrollbar */
+  /* ---- SCROLLBAR ---- */
   ::-webkit-scrollbar { width: 4px; height: 4px; }
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 2px; }
 
-  /* Filter tab active */
+  /* ---- LOGIN SCREEN ---- */
+  #screen-login {
+    position: fixed; inset: 0; z-index: 200;
+    display: flex; align-items: center; justify-content: center;
+    background: #0a0a0b;
+  }
+  .login-card {
+    width: 100%; max-width: 400px;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.09);
+    border-radius: 24px;
+    padding: 40px 36px;
+    backdrop-filter: blur(20px);
+    box-shadow: 0 32px 80px rgba(0,0,0,0.5);
+  }
+  /* Sawah Senja hero gradient text */
+  .brand-gradient {
+    background: linear-gradient(135deg, #f97316 0%, #fb923c 40%, #fbbf24 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .login-input {
+    width: 100%; background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 12px;
+    padding: 12px 14px; font-size: 14px;
+    color: #e4e4e7; font-family: var(--font-body);
+    outline: none; transition: border-color 0.15s;
+  }
+  .login-input:focus { border-color: #f97316; }
+  .login-input::placeholder { color: #52525b; }
+  .login-btn {
+    width: 100%; padding: 13px;
+    background: linear-gradient(135deg, #ea580c, #f97316);
+    color: #fff; font-family: var(--font-display);
+    font-size: 15px; font-weight: 700;
+    border: none; border-radius: 12px;
+    cursor: pointer; transition: all 0.15s;
+    letter-spacing: 0.02em;
+  }
+  .login-btn:hover { opacity: 0.9; transform: translateY(-1px); box-shadow: 0 8px 24px rgba(249,115,22,0.3); }
+  .login-btn:active { transform: scale(0.98); }
+  .login-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+  /* ---- APP SCREEN ---- */
+  #screen-app { display: none; }
+
+  /* ---- FILTER TABS ---- */
   .filter-tab {
-    padding: 6px 14px;
-    border-radius: 8px;
-    font-size: 12px;
-    font-weight: 500;
-    border: 1px solid transparent;
-    color: #71717a;
-    cursor: pointer;
-    transition: all 0.15s;
-    white-space: nowrap;
-    font-family: var(--font-body);
+    padding: 6px 14px; border-radius: 8px;
+    font-size: 12px; font-weight: 500;
+    border: 1px solid transparent; color: #71717a;
+    cursor: pointer; transition: all 0.15s;
+    white-space: nowrap; font-family: var(--font-body); background: transparent;
   }
   .filter-tab:hover { color: #d4d4d8; background: rgba(255,255,255,0.05); }
-  .filter-active {
-    background: rgba(255,255,255,0.08) !important;
-    border-color: rgba(255,255,255,0.15) !important;
-    color: #fff !important;
-  }
+  .filter-active { background: rgba(255,255,255,0.08) !important; border-color: rgba(255,255,255,0.15) !important; color: #fff !important; }
 
-  /* Card animation */
-  .card-order {
-    animation: cardIn 0.25s ease both;
+  /* ---- MAIN TABS ---- */
+  .main-tab {
+    padding: 8px 20px; border-radius: 10px;
+    font-size: 13px; font-weight: 600;
+    cursor: pointer; transition: all 0.15s;
+    font-family: var(--font-body); border: none;
   }
-  @keyframes cardIn {
-    from { opacity: 0; transform: translateY(8px); }
-    to   { opacity: 1; transform: translateY(0); }
-  }
+  .tab-active   { background: rgba(255,255,255,0.1); color: #fff; }
+  .tab-inactive { background: transparent; color: #71717a; }
+  .tab-inactive:hover { color: #d4d4d8; }
 
-  /* Skeleton */
+  /* ---- CARDS ---- */
+  .card-order { animation: cardIn 0.25s ease both; }
+  @keyframes cardIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+
+  .badge-pay { display:inline; font-size:12px; padding:2px 8px; border-radius:9999px; border-width:1px; border-style:solid; }
+
+  /* ---- SKELETON ---- */
   .skeleton {
     background: linear-gradient(90deg, #1f1f23 25%, #27272a 50%, #1f1f23 75%);
     background-size: 200% 100%;
-    animation: shimmer 1.5s infinite;
-    border-radius: 12px;
+    animation: shimmer 1.5s infinite; border-radius: 12px;
   }
   @keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
 
-  /* Stat card glassmorphism */
+  /* ---- STAT CARD ---- */
   .stat-card {
     background: rgba(255,255,255,0.03);
     border: 1px solid rgba(255,255,255,0.07);
-    backdrop-filter: blur(12px);
-    border-radius: 16px;
-    padding: 16px;
-    transition: all 0.2s;
+    backdrop-filter: blur(12px); border-radius: 16px;
+    padding: 16px; transition: all 0.2s;
   }
-  .stat-card:hover {
-    background: rgba(255,255,255,0.05);
-    border-color: rgba(255,255,255,0.12);
-  }
+  .stat-card:hover { background: rgba(255,255,255,0.05); border-color: rgba(255,255,255,0.12); }
 
-  /* Queue number pulse */
-  .pulse-dot {
-    animation: pulseDot 2s infinite;
+  /* ---- PULSE ---- */
+  .pulse-dot { animation: pulseDot 2s infinite; }
+  @keyframes pulseDot { 0%,100%{opacity:1;} 50%{opacity:0.4;} }
+
+  /* ---- EMPTY STATE ---- */
+  #empty-state { display:none; flex-direction:column; align-items:center; justify-content:center; }
+
+  /* ---- MENU MODAL ---- */
+  #menu-modal { opacity:0; transition:opacity 0.2s; }
+  #menu-modal.modal-visible { opacity:1; }
+
+  .form-input {
+    width:100%; background:#18181b; border:1px solid #3f3f46;
+    border-radius:10px; padding:9px 12px; font-size:13px;
+    color:#e4e4e7; font-family:var(--font-body); outline:none; transition:border-color 0.15s;
   }
-  @keyframes pulseDot {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.4; }
+  .form-input:focus { border-color:#f97316; }
+  .form-label {
+    display:block; font-size:11px; font-weight:500; color:#71717a;
+    margin-bottom:5px; text-transform:uppercase; letter-spacing:0.05em;
   }
 </style>
 </head>
+<body>
 
-<body class="min-h-screen relative">
-<div class="relative z-10">
+<!-- =====================================================
+     LOGIN SCREEN
+====================================================== -->
+<div id="screen-login">
+  <div class="login-card">
+    <!-- Brand -->
+    <div class="text-center mb-8">
+      <div class="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-gradient-to-br from-orange-500 to-amber-400 mb-4 shadow-lg shadow-orange-500/20">
+        <!-- Rice paddy / sun icon -->
+        <svg class="w-8 h-8 text-black" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 3v1m0 16v1M4.22 4.22l.707.707M18.364 18.364l.707.707M3 12H2m20 0h-1M4.22 19.778l.707-.707M18.364 5.636l.707-.707"/>
+          <circle cx="12" cy="12" r="4"/>
+        </svg>
+      </div>
+      <div class="font-display font-bold text-3xl brand-gradient leading-none mb-1">Sawah Senja</div>
+      <div class="text-zinc-500 text-sm mt-1">Counter · Kitchen · Menu Dashboard</div>
+    </div>
 
-  <!-- ===================== HEADER ===================== -->
+    <!-- Form -->
+    <div class="space-y-4">
+      <div>
+        <label class="form-label">Email</label>
+        <input id="inp-email" type="email" placeholder="admin@sawahdashboard.id" autocomplete="email" class="login-input" />
+      </div>
+      <div>
+        <label class="form-label">Password</label>
+        <div class="relative">
+          <input id="inp-password" type="password" placeholder="••••••••" autocomplete="current-password" class="login-input pr-10" />
+          <!-- Toggle show/hide -->
+          <button type="button" onclick="
+            const i=document.getElementById('inp-password');
+            i.type=i.type==='password'?'text':'password';
+            this.querySelector('svg').style.opacity=i.type==='text'?'1':'0.4';
+          " class="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300 transition-colors">
+            <svg class="w-4 h-4" style="opacity:0.4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+              <path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- Error message -->
+      <div id="login-error" style="display:none"
+        class="text-sm text-red-400 bg-red-400/10 border border-red-400/20 rounded-xl px-4 py-3">
+      </div>
+
+      <button id="btn-login" class="login-btn mt-2">Masuk</button>
+    </div>
+
+    <div class="text-center mt-6 text-xs text-zinc-600">
+      Akses terbatas — staff & admin saja
+    </div>
+  </div>
+</div>
+
+<!-- =====================================================
+     APP SCREEN
+====================================================== -->
+<div id="screen-app" class="relative z-10 min-h-screen">
+
+  <!-- HEADER -->
   <header class="sticky top-0 z-40 bg-zinc-950/80 backdrop-blur-xl border-b border-zinc-800/60">
     <div class="max-w-7xl mx-auto px-4 py-3">
       <div class="flex items-center justify-between gap-4">
 
-        <!-- Left: Logo + Clock -->
+        <!-- Logo + Clock -->
         <div class="flex items-center gap-4 min-w-0">
           <div class="flex items-center gap-2.5">
-            <div class="w-8 h-8 rounded-xl bg-gradient-to-br from-orange-500 to-amber-400 flex items-center justify-center text-black font-display font-bold text-sm">P</div>
+            <div class="w-8 h-8 rounded-xl bg-gradient-to-br from-orange-500 to-amber-400 flex items-center justify-center shadow-md shadow-orange-500/20">
+              <svg class="w-4 h-4 text-black" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <circle cx="12" cy="12" r="4"/><path stroke-linecap="round" d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>
+              </svg>
+            </div>
             <div>
-              <div class="font-display font-bold text-white text-sm leading-none">Picnic</div>
+              <div class="font-display font-bold text-white text-sm leading-none">Sawah Senja</div>
               <div class="text-zinc-500 text-[10px] leading-none">Counter Dashboard</div>
             </div>
           </div>
           <div id="realtime-clock" class="hidden sm:block font-mono text-sm text-zinc-400 bg-zinc-800/50 px-3 py-1.5 rounded-lg border border-zinc-700/50"></div>
         </div>
 
-        <!-- Center: Stats -->
+        <!-- Center stats -->
         <div class="hidden md:flex items-center gap-3 text-xs">
           <div class="text-center">
             <div class="text-zinc-500 text-[10px]">Total Order</div>
@@ -585,28 +932,48 @@ document.addEventListener("DOMContentLoaded", init);
           <div class="w-px h-8 bg-zinc-800"></div>
           <div class="text-center">
             <div class="text-zinc-500 text-[10px]">Aktif</div>
-            <div id="hdr-active" class="font-display font-bold text-white text-sm flex items-center gap-1">
-              <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 pulse-dot inline-block"></span>-
+            <div class="font-display font-bold text-white text-sm flex items-center gap-1">
+              <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 pulse-dot inline-block"></span>
+              <span id="hdr-active-num">-</span>
             </div>
           </div>
         </div>
 
-        <!-- Right: Actions -->
+        <!-- Right actions -->
         <div class="flex items-center gap-2">
-          <button id="btn-refresh" title="Refresh" class="w-8 h-8 rounded-lg bg-zinc-800 hover:bg-zinc-700 flex items-center justify-center text-zinc-400 hover:text-white transition-all">
+          <!-- User badge -->
+          <div class="hidden sm:flex items-center gap-2 bg-zinc-800/60 border border-zinc-700/40 rounded-lg px-3 py-1.5">
+            <div class="w-4 h-4 rounded-full bg-orange-500/20 flex items-center justify-center">
+              <svg class="w-2.5 h-2.5 text-orange-400" fill="currentColor" viewBox="0 0 24 24"><path d="M12 12c2.7 0 4.8-2.1 4.8-4.8S14.7 2.4 12 2.4 7.2 4.5 7.2 7.2 9.3 12 12 12zm0 2.4c-3.2 0-9.6 1.6-9.6 4.8v2.4h19.2v-2.4c0-3.2-6.4-4.8-9.6-4.8z"/></svg>
+            </div>
+            <span id="hdr-user-email" class="text-zinc-400 text-xs font-mono max-w-[140px] truncate"></span>
+          </div>
+          <button id="btn-logout" title="Keluar"
+            class="w-8 h-8 rounded-lg bg-zinc-800 hover:bg-red-900/40 hover:text-red-400 flex items-center justify-center text-zinc-400 transition-all">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>
+          </button>
+          <button id="btn-refresh" title="Refresh"
+            class="w-8 h-8 rounded-lg bg-zinc-800 hover:bg-zinc-700 flex items-center justify-center text-zinc-400 hover:text-white transition-all">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
           </button>
-          <button id="btn-fullscreen" title="Fullscreen" class="w-8 h-8 rounded-lg bg-zinc-800 hover:bg-zinc-700 flex items-center justify-center text-zinc-400 hover:text-white transition-all">
+          <button id="btn-fullscreen" title="Fullscreen"
+            class="w-8 h-8 rounded-lg bg-zinc-800 hover:bg-zinc-700 flex items-center justify-center text-zinc-400 hover:text-white transition-all">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"/></svg>
           </button>
         </div>
       </div>
     </div>
+
+    <!-- Main tabs -->
+    <div class="max-w-7xl mx-auto px-4 pb-2 flex items-center gap-1">
+      <button id="tab-orders" class="main-tab tab-active">📋 Pesanan</button>
+      <button id="tab-menu"   class="main-tab tab-inactive">🍽️ Kelola Menu</button>
+    </div>
   </header>
 
   <main class="max-w-7xl mx-auto px-4 py-6 space-y-6">
 
-    <!-- ===================== MINI ANALYTICS ===================== -->
+    <!-- ANALYTICS -->
     <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
       <div class="stat-card">
         <div class="text-xs text-zinc-500 mb-1">Total Order</div>
@@ -630,55 +997,156 @@ document.addEventListener("DOMContentLoaded", init);
       </div>
     </div>
 
-    <!-- ===================== FILTER + SEARCH ===================== -->
-    <div class="flex flex-col sm:flex-row gap-3 items-start sm:items-center">
-      <!-- Filter tabs -->
-      <div class="flex gap-1.5 overflow-x-auto pb-1 flex-shrink-0">
-        <button class="filter-tab filter-active" data-filter="ALL">
-          Semua <span id="badge-ALL" class="ml-1 font-mono text-[10px] bg-zinc-700 px-1.5 py-0.5 rounded-full">0</span>
-        </button>
-        <button class="filter-tab" data-filter="NEW">
-          <span class="text-red-400">●</span> Baru <span id="badge-NEW" class="ml-1 font-mono text-[10px] bg-red-900/40 text-red-400 px-1.5 py-0.5 rounded-full">0</span>
-        </button>
-        <button class="filter-tab" data-filter="COOKING">
-          <span class="text-amber-400">●</span> Masak <span id="badge-COOKING" class="ml-1 font-mono text-[10px] bg-amber-900/40 text-amber-400 px-1.5 py-0.5 rounded-full">0</span>
-        </button>
-        <button class="filter-tab" data-filter="READY">
-          <span class="text-emerald-400">●</span> Siap <span id="badge-READY" class="ml-1 font-mono text-[10px] bg-emerald-900/40 text-emerald-400 px-1.5 py-0.5 rounded-full">0</span>
-        </button>
-        <button class="filter-tab" data-filter="DONE">
-          <span class="text-zinc-400">●</span> Selesai <span id="badge-DONE" class="ml-1 font-mono text-[10px] bg-zinc-800 text-zinc-500 px-1.5 py-0.5 rounded-full">0</span>
-        </button>
+    <!-- ===== ORDERS SECTION ===== -->
+    <div id="orders-section">
+      <!-- Filter + Search -->
+      <div class="flex flex-col sm:flex-row gap-3 items-start sm:items-center mb-6">
+        <div class="flex gap-1.5 overflow-x-auto pb-1 flex-shrink-0">
+          <button class="filter-tab filter-active" data-filter="ALL">
+            Semua <span id="badge-ALL" class="ml-1 font-mono text-[10px] bg-zinc-700 px-1.5 py-0.5 rounded-full">0</span>
+          </button>
+          <button class="filter-tab" data-filter="NEW">
+            <span class="text-red-400">●</span> Baru
+            <span id="badge-NEW" class="ml-1 font-mono text-[10px] bg-red-900/40 text-red-400 px-1.5 py-0.5 rounded-full">0</span>
+          </button>
+          <button class="filter-tab" data-filter="COOKING">
+            <span class="text-amber-400">●</span> Masak
+            <span id="badge-COOKING" class="ml-1 font-mono text-[10px] bg-amber-900/40 text-amber-400 px-1.5 py-0.5 rounded-full">0</span>
+          </button>
+          <button class="filter-tab" data-filter="READY">
+            <span class="text-emerald-400">●</span> Siap
+            <span id="badge-READY" class="ml-1 font-mono text-[10px] bg-emerald-900/40 text-emerald-400 px-1.5 py-0.5 rounded-full">0</span>
+          </button>
+          <button class="filter-tab" data-filter="DONE">
+            <span class="text-zinc-400">●</span> Selesai
+            <span id="badge-DONE" class="ml-1 font-mono text-[10px] bg-zinc-800 text-zinc-500 px-1.5 py-0.5 rounded-full">0</span>
+          </button>
+        </div>
+        <div class="flex-1 w-full sm:max-w-xs">
+          <div class="relative">
+            <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+            <input id="search-input" type="text" placeholder="Cari order, nama, area…"
+              class="w-full bg-zinc-900 border border-zinc-700/60 rounded-xl pl-9 pr-4 py-2.5 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-orange-500/60 focus:bg-zinc-800 transition-all" />
+          </div>
+        </div>
       </div>
 
-      <!-- Search -->
-      <div class="flex-1 w-full sm:max-w-xs">
-        <div class="relative">
-          <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-          <input id="search-input" type="text" placeholder="Cari order, nama, area…"
-            class="w-full bg-zinc-900 border border-zinc-700/60 rounded-xl pl-9 pr-4 py-2.5 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-orange-500/60 focus:bg-zinc-800 transition-all" />
+      <!-- Skeleton -->
+      <div id="skeleton-state" class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+        <div class="skeleton h-52"></div>
+        <div class="skeleton h-52"></div>
+        <div class="skeleton h-52 hidden sm:block"></div>
+      </div>
+
+      <!-- Orders Grid -->
+      <div id="orders-grid" class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4"></div>
+
+      <!-- Empty State -->
+      <div id="empty-state" class="py-20 text-center">
+        <div class="w-20 h-20 rounded-2xl bg-zinc-900 border border-zinc-800 inline-flex items-center justify-center mb-4 text-4xl">🌾</div>
+        <div class="font-display font-bold text-zinc-400 text-lg">Belum ada pesanan</div>
+        <div class="text-zinc-600 text-sm mt-1">Pesanan baru akan muncul di sini secara realtime.</div>
+      </div>
+    </div>
+
+    <!-- ===== MENU MANAGER SECTION ===== -->
+    <div id="menu-section" style="display:none;">
+      <div class="flex items-center justify-between mb-5">
+        <div>
+          <div class="font-display font-bold text-white text-lg">Kelola Menu</div>
+          <div class="text-zinc-500 text-sm mt-0.5">Menu ini tampil di halaman order customer.</div>
+        </div>
+        <button id="btn-add-menu"
+          class="flex items-center gap-2 bg-orange-500 hover:bg-orange-400 text-black font-semibold text-sm px-4 py-2.5 rounded-xl transition-all active:scale-95">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg>
+          Tambah Item
+        </button>
+      </div>
+      <div id="menu-manager-panel" class="space-y-2">
+        <div class="flex flex-col items-center py-16 text-center">
+          <div class="skeleton h-12 w-48 mb-2"></div>
+          <div class="skeleton h-8 w-64"></div>
         </div>
       </div>
     </div>
 
-    <!-- ===================== SKELETON ===================== -->
-    <div id="skeleton-state" class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
-      <div class="skeleton h-52"></div>
-      <div class="skeleton h-52"></div>
-      <div class="skeleton h-52 hidden sm:block"></div>
-    </div>
-
-    <!-- ===================== ORDERS GRID ===================== -->
-    <div id="orders-grid" class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4"></div>
-
-    <!-- ===================== EMPTY STATE ===================== -->
-    <div id="empty-state" class="hidden flex flex-col items-center justify-center py-20 text-center">
-      <div class="w-20 h-20 rounded-2xl bg-zinc-900 border border-zinc-800 flex items-center justify-center mb-4 text-4xl">🧺</div>
-      <div class="font-display font-bold text-zinc-400 text-lg">Belum ada pesanan</div>
-      <div class="text-zinc-600 text-sm mt-1">Pesanan baru akan muncul di sini secara realtime.</div>
-    </div>
-
   </main>
 </div>
+
+<!-- ===== MENU ITEM MODAL ===== -->
+<div id="menu-modal" class="fixed inset-0 z-[9000] hidden">
+  <div id="menu-modal-backdrop" class="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>
+  <div class="absolute inset-0 flex items-center justify-center p-4">
+    <div class="relative bg-zinc-950 border border-zinc-800 rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto shadow-2xl">
+      <div class="sticky top-0 bg-zinc-950 border-b border-zinc-800/60 px-6 py-4 flex items-center justify-between">
+        <div id="menu-modal-title" class="font-display font-bold text-white text-lg">Tambah Item Menu</div>
+        <button id="btn-close-modal" class="w-8 h-8 rounded-lg bg-zinc-800 hover:bg-zinc-700 flex items-center justify-center text-zinc-400 hover:text-white transition-all">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div class="px-6 py-5 space-y-4">
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div class="sm:col-span-2">
+            <label class="form-label">Nama Item *</label>
+            <input id="mf-name" type="text" placeholder="cth: Nasi Goreng Special" class="form-input" maxlength="80" />
+          </div>
+          <div>
+            <label class="form-label">Kategori *</label>
+            <select id="mf-category" class="form-input">
+              <option value="Makanan">Makanan</option>
+              <option value="Minuman">Minuman</option>
+              <option value="Snack">Snack</option>
+              <option value="Paket Piknik">Paket Piknik</option>
+              <option value="Dessert">Dessert</option>
+              <option value="Lainnya">Lainnya</option>
+            </select>
+          </div>
+          <div>
+            <label class="form-label">Harga (Rp) *</label>
+            <input id="mf-price" type="number" placeholder="25000" min="0" class="form-input" />
+          </div>
+          <div>
+            <label class="form-label">Status Stok</label>
+            <select id="mf-stock" class="form-input">
+              <option value="true">✅ Tersedia</option>
+              <option value="false">❌ Habis</option>
+            </select>
+          </div>
+          <div>
+            <label class="form-label">Estimasi Waktu (menit)</label>
+            <input id="mf-preptime" type="number" placeholder="10" min="0" max="120" class="form-input" />
+          </div>
+          <div class="sm:col-span-2">
+            <label class="form-label">Deskripsi</label>
+            <textarea id="mf-description" rows="2" placeholder="Deskripsi singkat menu..." maxlength="200" class="form-input resize-none"></textarea>
+          </div>
+          <div class="sm:col-span-2">
+            <label class="form-label">URL Gambar</label>
+            <input id="mf-image" type="url" placeholder="https://..." class="form-input" />
+          </div>
+          <div class="sm:col-span-2">
+            <label class="flex items-center gap-3 cursor-pointer">
+              <input id="mf-bestseller" type="checkbox" class="w-4 h-4 accent-orange-500 rounded" />
+              <div>
+                <div class="text-sm font-medium text-zinc-300">🔥 Tandai sebagai Best Seller</div>
+                <div class="text-xs text-zinc-600">Tampil di bagian rekomendasi halaman customer</div>
+              </div>
+            </label>
+          </div>
+        </div>
+      </div>
+      <div class="sticky bottom-0 bg-zinc-950 border-t border-zinc-800/60 px-6 py-4 flex gap-3">
+        <button id="btn-save-menu" class="flex-1 bg-orange-500 hover:bg-orange-400 text-black font-bold text-sm py-3 rounded-xl transition-all active:scale-95">
+          Simpan Item
+        </button>
+        <button onclick="document.getElementById('btn-close-modal').click()"
+          class="px-5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-medium text-sm py-3 rounded-xl transition-all">
+          Batal
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
 </body>
 </html>
