@@ -19,12 +19,12 @@ import {
 // FIREBASE CONFIG
 // ============================================================
 const firebaseConfig = {
-  apiKey: "AIzaSyBPwP08GotnhWJ7A2d3VH09az5NSiMUPBo",
-  authDomain: "sawah-senja.firebaseapp.com",
-  projectId: "sawah-senja",
-  storageBucket: "sawah-senja.firebasestorage.app",
-  messagingSenderId: "568071270673",
-  appId: "1:568071270673:web:15d54aeb8c01a81b491cb0"
+  apiKey: "",
+  authDomain: "",
+  projectId: "",
+  storageBucket: "",
+  messagingSenderId: "",
+  appId: ""
 };
 
 const app = initializeApp(firebaseConfig);
@@ -534,8 +534,9 @@ function renderMenuPage() {
     <div id="cart-backdrop" onclick="closeCart()" class="fixed inset-0 bg-black/40 z-40 transition-opacity duration-300 opacity-0 pointer-events-none"></div>
 
     <!-- ===== CART DRAWER ===== -->
-    <div id="cart-drawer" class="fixed bottom-0 left-0 right-0 z-50 bg-white rounded-t-3xl shadow-2xl transition-transform duration-300 translate-y-full" style="max-height:85vh;overflow-y:auto;">
-      <div class="sticky top-0 bg-white px-5 pt-4 pb-3 border-b border-earth-100 z-10">
+    <div id="cart-drawer" class="fixed bottom-0 left-0 right-0 z-50 bg-white rounded-t-3xl shadow-2xl transition-transform duration-300 translate-y-full" style="max-height:85vh;display:flex;flex-direction:column;">
+      <!-- Header — tidak ikut scroll -->
+      <div class="flex-shrink-0 px-5 pt-4 pb-3 border-b border-earth-100">
         <div class="w-10 h-1 bg-earth-200 rounded-full mx-auto mb-3"></div>
         <div class="flex items-center justify-between">
           <div>
@@ -545,8 +546,10 @@ function renderMenuPage() {
           <button onclick="closeCart()" class="text-earth-400 text-2xl leading-none w-8 h-8 flex items-center justify-center">×</button>
         </div>
       </div>
-      <div id="cart-items-list" class="px-5 py-4 space-y-3"></div>
-      <div id="cart-footer" class="px-5 pb-6 pt-2 border-t border-earth-100"></div>
+      <!-- Items — area scroll -->
+      <div id="cart-items-list" class="flex-1 overflow-y-auto px-5 py-4 space-y-3"></div>
+      <!-- Footer checkout — selalu terlihat di bawah -->
+      <div id="cart-footer" class="flex-shrink-0 px-5 pb-6 pt-3 border-t border-earth-100 bg-white" style="padding-bottom:max(24px,env(safe-area-inset-bottom))"></div>
     </div>
 
   </div>`;
