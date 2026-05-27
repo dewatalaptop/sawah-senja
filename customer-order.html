@@ -209,12 +209,18 @@ async function submitOrder(customerName, customerWhatsapp, paymentMethod) {
   if (btn) { btn.disabled = true; btn.textContent = "Memproses…"; }
 
   try {
-    const orderId       = await generateOrderId();
+    console.log("=== SUBMIT START ===");
+
+    // Step 1: generate ID
+    console.log("Step 1: generate orderId...");
+    const orderId = await generateOrderId();
+    console.log("orderId OK:", orderId);
+
+    // Step 2: build payload
     const items         = Object.values(cart).map(i => ({ name: i.name, qty: i.qty, price: i.price, notes: i.notes || "" }));
     const subtotal      = cartSubtotal();
     const total         = cartTotal();
     const paymentStatus = paymentMethod === "QRIS" ? "PENDING" : "UNPAID";
-
     const orderData = {
       orderId, areaCode, customerName, customerWhatsapp,
       items, subtotal, serviceFee: SERVICE_FEE, total,
@@ -223,16 +229,22 @@ async function submitOrder(customerName, customerWhatsapp, paymentMethod) {
       createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
       readyAt: null, completedAt: null, whatsappSent: false,
     };
+    console.log("Step 2: payload OK", JSON.stringify({orderId, areaCode, customerName, total}));
 
-    await setDoc(doc(collection(db, "orders")), orderData);
+    // Step 3: write to Firestore
+    console.log("Step 3: writing to Firestore...");
+    const newRef = doc(collection(db, "orders"));
+    console.log("new doc ref:", newRef.id);
+    await setDoc(newRef, orderData);
+    console.log("=== FIRESTORE WRITE OK ===");
 
     lastOrder    = { ...orderData, orderId, total, customerName, areaCode, paymentMethod, paymentStatus };
     cart         = {};
     checkoutStep = "success";
     renderApp();
   } catch(e) {
-    console.error(e);
-    showToast("Gagal mengirim order. Coba lagi.", "error");
+    console.error("=== SUBMIT FAILED ===", e.code, e.message, e);
+    showToast(`Gagal: ${e.code || e.message}`, "error");
     if (btn) { btn.disabled = false; btn.textContent = "Konfirmasi Pesanan"; }
   }
 }
