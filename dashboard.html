@@ -1,0 +1,684 @@
+<!DOCTYPE html>
+<html lang="id" class="dark">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Picnic — Counter Dashboard</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@600;700;800&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet" />
+
+<!-- Firebase Modular SDK v10 -->
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import {
+  getFirestore, collection, onSnapshot, doc, updateDoc, query,
+  where, orderBy, Timestamp, serverTimestamp, getDoc
+} from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+// ============================================================
+// FIREBASE CONFIG — isi dengan config project Anda
+// ============================================================
+const firebaseConfig = {
+  apiKey: "",
+  authDomain: "",
+  projectId: "",
+  storageBucket: "",
+  messagingSenderId: "",
+  appId: ""
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+
+// ============================================================
+// STATE
+// ============================================================
+let allOrders = [];
+let activeFilter = "ALL";
+let searchQuery = "";
+let unsubscribe = null;
+let knownOrderIds = new Set();
+let audioCtx = null;
+
+// ============================================================
+// HELPER FUNCTIONS
+// ============================================================
+function formatCurrency(n) {
+  return "Rp " + Number(n).toLocaleString("id-ID");
+}
+
+function formatTime(ts) {
+  if (!ts) return "-";
+  const d = ts.toDate ? ts.toDate() : new Date(ts);
+  return d.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
+}
+
+function formatDate(ts) {
+  if (!ts) return "-";
+  const d = ts.toDate ? ts.toDate() : new Date(ts);
+  return d.toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" });
+}
+
+function elapsedMinutes(ts) {
+  if (!ts) return 0;
+  const d = ts.toDate ? ts.toDate() : new Date(ts);
+  return Math.floor((Date.now() - d.getTime()) / 60000);
+}
+
+function statusOrder(s) {
+  const map = { NEW: 0, COOKING: 1, READY: 2, DONE: 3 };
+  return map[s] ?? 99;
+}
+
+function getStatusLabel(s) {
+  const map = { NEW: "Baru", COOKING: "Masak", READY: "Siap", DONE: "Selesai" };
+  return map[s] ?? s;
+}
+
+function getStatusColorClass(s) {
+  if (s === "NEW")     return "text-red-400 bg-red-400/10 border-red-400/30";
+  if (s === "COOKING") return "text-amber-400 bg-amber-400/10 border-amber-400/30";
+  if (s === "READY")   return "text-emerald-400 bg-emerald-400/10 border-emerald-400/30";
+  if (s === "DONE")    return "text-zinc-400 bg-zinc-400/10 border-zinc-400/30";
+  return "text-zinc-400";
+}
+
+function getCardBorderClass(s) {
+  if (s === "NEW")     return "border-red-500/40";
+  if (s === "COOKING") return "border-amber-500/40";
+  if (s === "READY")   return "border-emerald-500/40";
+  if (s === "DONE")    return "border-zinc-700/40";
+  return "border-zinc-700/40";
+}
+
+// ============================================================
+// AUDIO NOTIFICATION
+// ============================================================
+function playNewOrderSound() {
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const freqs = [523, 659, 784];
+    freqs.forEach((freq, i) => {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.frequency.value = freq;
+      osc.type = "sine";
+      gain.gain.setValueAtTime(0, audioCtx.currentTime + i * 0.15);
+      gain.gain.linearRampToValueAtTime(0.3, audioCtx.currentTime + i * 0.15 + 0.05);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + i * 0.15 + 0.4);
+      osc.start(audioCtx.currentTime + i * 0.15);
+      osc.stop(audioCtx.currentTime + i * 0.15 + 0.4);
+    });
+  } catch(e) {}
+}
+
+// ============================================================
+// FIREBASE — Realtime listener
+// ============================================================
+function startListener() {
+  if (unsubscribe) unsubscribe();
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const todayTs = Timestamp.fromDate(today);
+
+  const q = query(
+    collection(db, "orders"),
+    where("createdAt", ">=", todayTs),
+    orderBy("createdAt", "desc")
+  );
+
+  unsubscribe = onSnapshot(q, (snapshot) => {
+    const orders = [];
+    let hasNew = false;
+
+    snapshot.forEach(docSnap => {
+      const data = { id: docSnap.id, ...docSnap.data() };
+      orders.push(data);
+
+      if (!knownOrderIds.has(docSnap.id) && knownOrderIds.size > 0) {
+        hasNew = true;
+      }
+      knownOrderIds.add(docSnap.id);
+    });
+
+    if (hasNew) playNewOrderSound();
+
+    allOrders = orders;
+    renderAll();
+  }, (err) => {
+    console.error("Listener error:", err);
+    showToast("Error koneksi Firestore", "error");
+  });
+}
+
+// ============================================================
+// UPDATE STATUS
+// ============================================================
+async function updateStatus(orderId, newStatus) {
+  try {
+    const ref = doc(db, "orders", orderId);
+    const updateData = {
+      orderStatus: newStatus,
+      updatedAt: serverTimestamp()
+    };
+    if (newStatus === "READY")  updateData.readyAt = serverTimestamp();
+    if (newStatus === "DONE")   updateData.completedAt = serverTimestamp();
+
+    await updateDoc(ref, updateData);
+    showToast(`Order diupdate → ${getStatusLabel(newStatus)}`, "success");
+  } catch(e) {
+    showToast("Gagal update status", "error");
+  }
+}
+
+// ============================================================
+// WHATSAPP
+// ============================================================
+function sendWhatsApp(order) {
+  const phone = String(order.customerWhatsapp).replace(/\D/g, "");
+  const msg = encodeURIComponent(
+    `Halo ${order.customerName} 👋\nPesanan Anda dengan nomor *${order.orderId}* sudah siap diambil di pickup counter.\nTerima kasih 🙏`
+  );
+  window.open(`https://wa.me/${phone}?text=${msg}`, "_blank");
+
+  // Mark whatsappSent
+  const ref = doc(db, "orders", order.id);
+  updateDoc(ref, { whatsappSent: true }).catch(() => {});
+}
+
+// ============================================================
+// ANALYTICS
+// ============================================================
+function calcAnalytics() {
+  const active = allOrders.filter(o => o.orderStatus !== "DONE");
+  const done   = allOrders.filter(o => o.orderStatus === "DONE");
+  const total  = allOrders.length;
+  const revenue = allOrders.reduce((s, o) => s + (o.total || 0), 0);
+  const avg    = total ? Math.round(revenue / total) : 0;
+  const items  = allOrders.reduce((s, o) => s + (o.items || []).reduce((a, i) => a + (i.qty || 0), 0), 0);
+  return { total, revenue, avg, items, active: active.length };
+}
+
+// ============================================================
+// FILTER & SEARCH
+// ============================================================
+function getFilteredOrders() {
+  let list = [...allOrders];
+
+  if (activeFilter !== "ALL") {
+    list = list.filter(o => o.orderStatus === activeFilter);
+  }
+
+  if (searchQuery.trim()) {
+    const q = searchQuery.toLowerCase();
+    list = list.filter(o =>
+      (o.orderId || "").toLowerCase().includes(q) ||
+      (o.customerName || "").toLowerCase().includes(q) ||
+      (o.areaCode || "").toLowerCase().includes(q)
+    );
+  }
+
+  // Sort: NEW > COOKING > READY > DONE, then by time desc
+  list.sort((a, b) => {
+    const sd = statusOrder(a.orderStatus) - statusOrder(b.orderStatus);
+    if (sd !== 0) return sd;
+    const ta = a.createdAt?.toDate?.() ?? new Date(0);
+    const tb = b.createdAt?.toDate?.() ?? new Date(0);
+    return tb - ta;
+  });
+
+  return list;
+}
+
+function countByStatus(s) {
+  return allOrders.filter(o => s === "ALL" ? true : o.orderStatus === s).length;
+}
+
+// ============================================================
+// RENDER
+// ============================================================
+function renderAll() {
+  renderAnalytics();
+  renderFilterBadges();
+  renderOrders();
+}
+
+function renderAnalytics() {
+  const a = calcAnalytics();
+  document.getElementById("stat-total").textContent = a.total;
+  document.getElementById("stat-revenue").textContent = formatCurrency(a.revenue);
+  document.getElementById("stat-avg").textContent = formatCurrency(a.avg);
+  document.getElementById("stat-items").textContent = a.items;
+  document.getElementById("hdr-orders").textContent = a.total + " order";
+  document.getElementById("hdr-revenue").textContent = formatCurrency(a.revenue);
+  document.getElementById("hdr-active").textContent = a.active + " aktif";
+}
+
+function renderFilterBadges() {
+  ["ALL","NEW","COOKING","READY","DONE"].forEach(s => {
+    const el = document.getElementById("badge-" + s);
+    if (el) el.textContent = countByStatus(s);
+  });
+}
+
+function renderOrders() {
+  const grid = document.getElementById("orders-grid");
+  const empty = document.getElementById("empty-state");
+  const skeleton = document.getElementById("skeleton-state");
+
+  skeleton.classList.add("hidden");
+
+  const list = getFilteredOrders();
+
+  if (list.length === 0) {
+    grid.innerHTML = "";
+    empty.classList.remove("hidden");
+    return;
+  }
+  empty.classList.add("hidden");
+
+  grid.innerHTML = list.map(order => buildCard(order)).join("");
+
+  // Bind events
+  grid.querySelectorAll("[data-action]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const action = btn.dataset.action;
+      const id     = btn.dataset.id;
+      const order  = allOrders.find(o => o.id === id);
+      if (!order) return;
+
+      if (action === "start-cooking")   updateStatus(id, "COOKING");
+      if (action === "mark-ready")      updateStatus(id, "READY");
+      if (action === "complete-order")  updateStatus(id, "DONE");
+      if (action === "send-wa")         sendWhatsApp(order);
+    });
+  });
+}
+
+function buildCard(o) {
+  const elapsed = elapsedMinutes(o.createdAt);
+  const border  = getCardBorderClass(o.orderStatus);
+  const scls    = getStatusColorClass(o.orderStatus);
+  const slabel  = getStatusLabel(o.orderStatus);
+
+  const itemsHtml = (o.items || []).map(item => `
+    <div class="flex justify-between text-xs">
+      <span class="text-zinc-300">${item.qty}x <span class="font-medium">${item.name}</span>${item.notes ? ` <span class="text-zinc-500 italic">(${item.notes})</span>` : ""}</span>
+      <span class="text-zinc-400">${formatCurrency(item.price * item.qty)}</span>
+    </div>
+  `).join("");
+
+  let actionBtn = "";
+  if (o.orderStatus === "NEW")
+    actionBtn = `<button data-action="start-cooking" data-id="${o.id}" class="action-btn bg-amber-500 hover:bg-amber-400 text-black font-semibold text-xs py-2 px-4 rounded-lg transition-all active:scale-95">▶ Mulai Masak</button>`;
+  else if (o.orderStatus === "COOKING")
+    actionBtn = `<button data-action="mark-ready" data-id="${o.id}" class="action-btn bg-emerald-500 hover:bg-emerald-400 text-black font-semibold text-xs py-2 px-4 rounded-lg transition-all active:scale-95">✔ Tandai Siap</button>`;
+  else if (o.orderStatus === "READY")
+    actionBtn = `<button data-action="complete-order" data-id="${o.id}" class="action-btn bg-zinc-600 hover:bg-zinc-500 text-white font-semibold text-xs py-2 px-4 rounded-lg transition-all active:scale-95">✓ Selesaikan</button>`;
+
+  const waBtn = (o.orderStatus === "READY")
+    ? `<button data-action="send-wa" data-id="${o.id}" class="action-btn flex items-center gap-1 bg-green-600 hover:bg-green-500 text-white font-semibold text-xs py-2 px-3 rounded-lg transition-all active:scale-95${o.whatsappSent ? " opacity-50" : ""}">
+        <svg class="w-3 h-3" fill="currentColor" viewBox="0 0 24 24"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/><path d="M12 0C5.373 0 0 5.373 0 12c0 2.127.558 4.126 1.533 5.858L0 24l6.335-1.502A11.955 11.955 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 22c-1.853 0-3.585-.5-5.082-1.373l-.362-.217-3.761.892.952-3.669-.239-.381A9.955 9.955 0 012 12C2 6.477 6.477 2 12 2s10 4.477 10 10-4.477 10-10 10z"/></svg>
+        ${o.whatsappSent ? "Terkirim" : "Kirim WA"}
+      </button>` : "";
+
+  const payBadge = o.paymentStatus === "PAID"
+    ? `<span class="text-xs px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">PAID</span>`
+    : o.paymentStatus === "PENDING"
+    ? `<span class="text-xs px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-400 border border-amber-500/30">PENDING</span>`
+    : `<span class="text-xs px-2 py-0.5 rounded-full bg-zinc-700 text-zinc-400">UNPAID</span>`;
+
+  return `
+  <div class="card-order relative rounded-2xl bg-zinc-900/80 border ${border} overflow-hidden transition-all duration-300 hover:shadow-xl hover:shadow-black/30 hover:-translate-y-0.5">
+    <!-- Status bar top -->
+    <div class="h-1 w-full ${o.orderStatus==="NEW"?"bg-red-500":o.orderStatus==="COOKING"?"bg-amber-500":o.orderStatus==="READY"?"bg-emerald-500":"bg-zinc-700"}"></div>
+
+    <div class="p-4">
+      <!-- Header row -->
+      <div class="flex items-start justify-between mb-3">
+        <div>
+          <div class="font-mono text-xl font-bold text-white leading-none">${o.orderId || "-"}</div>
+          <div class="text-xs text-zinc-500 mt-0.5 font-mono">${o.areaCode || "-"} · ${formatTime(o.createdAt)}</div>
+        </div>
+        <div class="flex flex-col items-end gap-1">
+          <span class="text-xs px-2 py-0.5 rounded-full border ${scls} font-medium">${slabel}</span>
+          ${payBadge}
+        </div>
+      </div>
+
+      <!-- Customer -->
+      <div class="flex items-center gap-2 mb-3">
+        <div class="w-7 h-7 rounded-full bg-zinc-700 flex items-center justify-center text-xs font-bold text-white">${(o.customerName||"?")[0].toUpperCase()}</div>
+        <div>
+          <div class="text-sm font-medium text-white">${o.customerName || "-"}</div>
+          <div class="text-xs text-zinc-500 font-mono">${o.customerWhatsapp || "-"}</div>
+        </div>
+      </div>
+
+      <!-- Items -->
+      <div class="space-y-1 mb-3 pb-3 border-b border-zinc-800">
+        ${itemsHtml}
+      </div>
+
+      <!-- Total + elapsed -->
+      <div class="flex items-center justify-between mb-3">
+        <div>
+          <div class="text-xs text-zinc-500">Total</div>
+          <div class="text-base font-bold text-white">${formatCurrency(o.total || 0)}</div>
+        </div>
+        <div class="text-right">
+          <div class="text-xs text-zinc-500">Tunggu</div>
+          <div class="text-sm font-mono ${elapsed>15?"text-red-400":elapsed>8?"text-amber-400":"text-zinc-400"}">${elapsed} mnt</div>
+        </div>
+      </div>
+
+      <!-- Actions -->
+      <div class="flex gap-2 flex-wrap">
+        ${actionBtn}
+        ${waBtn}
+      </div>
+    </div>
+  </div>`;
+}
+
+// ============================================================
+// TOAST
+// ============================================================
+function showToast(msg, type = "info") {
+  const colors = { success: "bg-emerald-600", error: "bg-red-600", info: "bg-zinc-700" };
+  const t = document.createElement("div");
+  t.className = `fixed bottom-6 right-4 z-50 px-4 py-2.5 rounded-xl text-white text-sm font-medium shadow-xl transition-all duration-300 translate-y-4 opacity-0 ${colors[type] || colors.info}`;
+  t.textContent = msg;
+  document.body.appendChild(t);
+  requestAnimationFrame(() => t.classList.remove("translate-y-4", "opacity-0"));
+  setTimeout(() => { t.classList.add("translate-y-4", "opacity-0"); setTimeout(() => t.remove(), 300); }, 2500);
+}
+
+// ============================================================
+// CLOCK
+// ============================================================
+function startClock() {
+  const el = document.getElementById("realtime-clock");
+  function tick() {
+    const now = new Date();
+    el.textContent = now.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  }
+  tick();
+  setInterval(tick, 1000);
+}
+
+// ============================================================
+// FULLSCREEN
+// ============================================================
+function toggleFullscreen() {
+  if (!document.fullscreenElement) {
+    document.documentElement.requestFullscreen().catch(() => {});
+  } else {
+    document.exitFullscreen();
+  }
+}
+
+// ============================================================
+// INIT
+// ============================================================
+function init() {
+  startClock();
+  startListener();
+
+  // Filter tabs
+  document.querySelectorAll("[data-filter]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      activeFilter = btn.dataset.filter;
+      document.querySelectorAll("[data-filter]").forEach(b => b.classList.remove("filter-active"));
+      btn.classList.add("filter-active");
+      renderOrders();
+    });
+  });
+
+  // Search
+  document.getElementById("search-input").addEventListener("input", e => {
+    searchQuery = e.target.value;
+    renderOrders();
+  });
+
+  // Refresh
+  document.getElementById("btn-refresh").addEventListener("click", () => {
+    startListener();
+    showToast("Listener di-refresh", "info");
+  });
+
+  // Fullscreen
+  document.getElementById("btn-fullscreen").addEventListener("click", toggleFullscreen);
+}
+
+document.addEventListener("DOMContentLoaded", init);
+</script>
+
+<style>
+  :root {
+    --font-display: 'Syne', sans-serif;
+    --font-mono: 'DM Mono', monospace;
+    --font-body: 'DM Sans', sans-serif;
+  }
+  body {
+    font-family: var(--font-body);
+    background: #0a0a0b;
+    color: #e4e4e7;
+  }
+  .font-display { font-family: var(--font-display); }
+  .font-mono    { font-family: var(--font-mono); }
+
+  /* Animated background */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background:
+      radial-gradient(ellipse 60% 40% at 20% 10%, rgba(234,88,12,0.07) 0%, transparent 60%),
+      radial-gradient(ellipse 40% 50% at 80% 80%, rgba(16,185,129,0.05) 0%, transparent 60%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 4px; height: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 2px; }
+
+  /* Filter tab active */
+  .filter-tab {
+    padding: 6px 14px;
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 500;
+    border: 1px solid transparent;
+    color: #71717a;
+    cursor: pointer;
+    transition: all 0.15s;
+    white-space: nowrap;
+    font-family: var(--font-body);
+  }
+  .filter-tab:hover { color: #d4d4d8; background: rgba(255,255,255,0.05); }
+  .filter-active {
+    background: rgba(255,255,255,0.08) !important;
+    border-color: rgba(255,255,255,0.15) !important;
+    color: #fff !important;
+  }
+
+  /* Card animation */
+  .card-order {
+    animation: cardIn 0.25s ease both;
+  }
+  @keyframes cardIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  /* Skeleton */
+  .skeleton {
+    background: linear-gradient(90deg, #1f1f23 25%, #27272a 50%, #1f1f23 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
+    border-radius: 12px;
+  }
+  @keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+
+  /* Stat card glassmorphism */
+  .stat-card {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.07);
+    backdrop-filter: blur(12px);
+    border-radius: 16px;
+    padding: 16px;
+    transition: all 0.2s;
+  }
+  .stat-card:hover {
+    background: rgba(255,255,255,0.05);
+    border-color: rgba(255,255,255,0.12);
+  }
+
+  /* Queue number pulse */
+  .pulse-dot {
+    animation: pulseDot 2s infinite;
+  }
+  @keyframes pulseDot {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+</style>
+</head>
+
+<body class="min-h-screen relative">
+<div class="relative z-10">
+
+  <!-- ===================== HEADER ===================== -->
+  <header class="sticky top-0 z-40 bg-zinc-950/80 backdrop-blur-xl border-b border-zinc-800/60">
+    <div class="max-w-7xl mx-auto px-4 py-3">
+      <div class="flex items-center justify-between gap-4">
+
+        <!-- Left: Logo + Clock -->
+        <div class="flex items-center gap-4 min-w-0">
+          <div class="flex items-center gap-2.5">
+            <div class="w-8 h-8 rounded-xl bg-gradient-to-br from-orange-500 to-amber-400 flex items-center justify-center text-black font-display font-bold text-sm">P</div>
+            <div>
+              <div class="font-display font-bold text-white text-sm leading-none">Picnic</div>
+              <div class="text-zinc-500 text-[10px] leading-none">Counter Dashboard</div>
+            </div>
+          </div>
+          <div id="realtime-clock" class="hidden sm:block font-mono text-sm text-zinc-400 bg-zinc-800/50 px-3 py-1.5 rounded-lg border border-zinc-700/50"></div>
+        </div>
+
+        <!-- Center: Stats -->
+        <div class="hidden md:flex items-center gap-3 text-xs">
+          <div class="text-center">
+            <div class="text-zinc-500 text-[10px]">Total Order</div>
+            <div id="hdr-orders" class="font-display font-bold text-white text-sm">-</div>
+          </div>
+          <div class="w-px h-8 bg-zinc-800"></div>
+          <div class="text-center">
+            <div class="text-zinc-500 text-[10px]">Revenue</div>
+            <div id="hdr-revenue" class="font-display font-bold text-white text-sm">-</div>
+          </div>
+          <div class="w-px h-8 bg-zinc-800"></div>
+          <div class="text-center">
+            <div class="text-zinc-500 text-[10px]">Aktif</div>
+            <div id="hdr-active" class="font-display font-bold text-white text-sm flex items-center gap-1">
+              <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 pulse-dot inline-block"></span>-
+            </div>
+          </div>
+        </div>
+
+        <!-- Right: Actions -->
+        <div class="flex items-center gap-2">
+          <button id="btn-refresh" title="Refresh" class="w-8 h-8 rounded-lg bg-zinc-800 hover:bg-zinc-700 flex items-center justify-center text-zinc-400 hover:text-white transition-all">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+          </button>
+          <button id="btn-fullscreen" title="Fullscreen" class="w-8 h-8 rounded-lg bg-zinc-800 hover:bg-zinc-700 flex items-center justify-center text-zinc-400 hover:text-white transition-all">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-7xl mx-auto px-4 py-6 space-y-6">
+
+    <!-- ===================== MINI ANALYTICS ===================== -->
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div class="stat-card">
+        <div class="text-xs text-zinc-500 mb-1">Total Order</div>
+        <div id="stat-total" class="font-display font-bold text-2xl text-white">-</div>
+        <div class="text-[10px] text-zinc-600 mt-1">Hari ini</div>
+      </div>
+      <div class="stat-card">
+        <div class="text-xs text-zinc-500 mb-1">Revenue</div>
+        <div id="stat-revenue" class="font-display font-bold text-lg text-white leading-tight">-</div>
+        <div class="text-[10px] text-zinc-600 mt-1">Hari ini</div>
+      </div>
+      <div class="stat-card">
+        <div class="text-xs text-zinc-500 mb-1">Rata-rata</div>
+        <div id="stat-avg" class="font-display font-bold text-lg text-white leading-tight">-</div>
+        <div class="text-[10px] text-zinc-600 mt-1">Per order</div>
+      </div>
+      <div class="stat-card">
+        <div class="text-xs text-zinc-500 mb-1">Item Terjual</div>
+        <div id="stat-items" class="font-display font-bold text-2xl text-white">-</div>
+        <div class="text-[10px] text-zinc-600 mt-1">Total qty</div>
+      </div>
+    </div>
+
+    <!-- ===================== FILTER + SEARCH ===================== -->
+    <div class="flex flex-col sm:flex-row gap-3 items-start sm:items-center">
+      <!-- Filter tabs -->
+      <div class="flex gap-1.5 overflow-x-auto pb-1 flex-shrink-0">
+        <button class="filter-tab filter-active" data-filter="ALL">
+          Semua <span id="badge-ALL" class="ml-1 font-mono text-[10px] bg-zinc-700 px-1.5 py-0.5 rounded-full">0</span>
+        </button>
+        <button class="filter-tab" data-filter="NEW">
+          <span class="text-red-400">●</span> Baru <span id="badge-NEW" class="ml-1 font-mono text-[10px] bg-red-900/40 text-red-400 px-1.5 py-0.5 rounded-full">0</span>
+        </button>
+        <button class="filter-tab" data-filter="COOKING">
+          <span class="text-amber-400">●</span> Masak <span id="badge-COOKING" class="ml-1 font-mono text-[10px] bg-amber-900/40 text-amber-400 px-1.5 py-0.5 rounded-full">0</span>
+        </button>
+        <button class="filter-tab" data-filter="READY">
+          <span class="text-emerald-400">●</span> Siap <span id="badge-READY" class="ml-1 font-mono text-[10px] bg-emerald-900/40 text-emerald-400 px-1.5 py-0.5 rounded-full">0</span>
+        </button>
+        <button class="filter-tab" data-filter="DONE">
+          <span class="text-zinc-400">●</span> Selesai <span id="badge-DONE" class="ml-1 font-mono text-[10px] bg-zinc-800 text-zinc-500 px-1.5 py-0.5 rounded-full">0</span>
+        </button>
+      </div>
+
+      <!-- Search -->
+      <div class="flex-1 w-full sm:max-w-xs">
+        <div class="relative">
+          <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+          <input id="search-input" type="text" placeholder="Cari order, nama, area…"
+            class="w-full bg-zinc-900 border border-zinc-700/60 rounded-xl pl-9 pr-4 py-2.5 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-orange-500/60 focus:bg-zinc-800 transition-all" />
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== SKELETON ===================== -->
+    <div id="skeleton-state" class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+      <div class="skeleton h-52"></div>
+      <div class="skeleton h-52"></div>
+      <div class="skeleton h-52 hidden sm:block"></div>
+    </div>
+
+    <!-- ===================== ORDERS GRID ===================== -->
+    <div id="orders-grid" class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4"></div>
+
+    <!-- ===================== EMPTY STATE ===================== -->
+    <div id="empty-state" class="hidden flex flex-col items-center justify-center py-20 text-center">
+      <div class="w-20 h-20 rounded-2xl bg-zinc-900 border border-zinc-800 flex items-center justify-center mb-4 text-4xl">🧺</div>
+      <div class="font-display font-bold text-zinc-400 text-lg">Belum ada pesanan</div>
+      <div class="text-zinc-600 text-sm mt-1">Pesanan baru akan muncul di sini secara realtime.</div>
+    </div>
+
+  </main>
+</div>
+</body>
+</html>
