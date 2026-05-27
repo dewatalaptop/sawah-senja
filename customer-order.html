@@ -1,0 +1,733 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<meta name="theme-color" content="#f5f0e8" />
+<title>Picnic — Order Online</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Playfair+Display:wght@600;700&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet" />
+
+<!-- Firebase Modular SDK v10 -->
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import {
+  getFirestore, collection, doc, setDoc, getDocs, query,
+  where, orderBy, Timestamp, serverTimestamp, getCountFromServer
+} from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+// ============================================================
+// FIREBASE CONFIG
+// ============================================================
+const firebaseConfig = {
+  apiKey: "",
+  authDomain: "",
+  projectId: "",
+  storageBucket: "",
+  messagingSenderId: "",
+  appId: ""
+};
+
+const app = initializeApp(firebaseConfig);
+const db  = getFirestore(app);
+
+// ============================================================
+// AREA CODE — baca dari URL ?table=A1
+// ============================================================
+const params   = new URLSearchParams(window.location.search);
+const areaCode = (params.get("table") || "GENERAL").toUpperCase();
+
+// ============================================================
+// MENU DATA
+// ============================================================
+const MENU = [
+  // Makanan
+  { id: 1, category: "Makanan", name: "Nasi Goreng Special", price: 28000, image: "https://dummyimage.com/400x300/c4a882/fff&text=Nasi+Goreng", description: "Nasi goreng premium dengan telur, ayam suwir & acar", stock: true, bestSeller: true, prepTime: 12 },
+  { id: 2, category: "Makanan", name: "Ayam Geprek Madu", price: 32000, image: "https://dummyimage.com/400x300/b08850/fff&text=Ayam+Geprek", description: "Ayam crispy digeprek dengan sambel madu pedas manis", stock: true, bestSeller: false, prepTime: 15 },
+  { id: 3, category: "Makanan", name: "Mie Goreng Kampung", price: 25000, image: "https://dummyimage.com/400x300/c4a050/fff&text=Mie+Goreng", description: "Mie kuning goreng dengan sayur segar dan telur dadar", stock: true, bestSeller: false, prepTime: 10 },
+  { id: 4, category: "Makanan", name: "Nasi Liwet Ayam", price: 38000, image: "https://dummyimage.com/400x300/a08040/fff&text=Nasi+Liwet", description: "Nasi liwet gurih lengkap dengan ayam opor & lauk", stock: false, bestSeller: true, prepTime: 20 },
+
+  // Minuman
+  { id: 5, category: "Minuman", name: "Es Teh Manis", price: 8000, image: "https://dummyimage.com/400x300/7ab8a0/fff&text=Es+Teh", description: "Teh manis segar dengan es batu pilihan", stock: true, bestSeller: true, prepTime: 3 },
+  { id: 6, category: "Minuman", name: "Jus Alpukat", price: 18000, image: "https://dummyimage.com/400x300/5a9060/fff&text=Jus+Alpukat", description: "Alpukat segar blended dengan susu kental manis", stock: true, bestSeller: false, prepTime: 5 },
+  { id: 7, category: "Minuman", name: "Kopi Susu Gula Aren", price: 22000, image: "https://dummyimage.com/400x300/6b4226/fff&text=Kopi+Susu", description: "Espresso dengan susu fresh & gula aren asli", stock: true, bestSeller: true, prepTime: 5 },
+  { id: 8, category: "Minuman", name: "Lemonade Picnic", price: 20000, image: "https://dummyimage.com/400x300/d4b84a/fff&text=Lemonade", description: "Lemon segar, mint & soda - signature drink kami", stock: true, bestSeller: false, prepTime: 4 },
+
+  // Snack
+  { id: 9,  category: "Snack", name: "Pisang Goreng Crispy", price: 15000, image: "https://dummyimage.com/400x300/c8903a/fff&text=Pisang+Goreng", description: "Pisang raja goreng crispy dengan meses & keju", stock: true, bestSeller: false, prepTime: 8 },
+  { id: 10, category: "Snack", name: "Cireng Isi Ayam", price: 18000, image: "https://dummyimage.com/400x300/b07030/fff&text=Cireng", description: "Aci goreng crispy isi ayam berbumbu kacang", stock: true, bestSeller: true, prepTime: 10 },
+  { id: 11, category: "Snack", name: "Singkong Bakar", price: 12000, image: "https://dummyimage.com/400x300/986040/fff&text=Singkong", description: "Singkong bakar empuk dengan mentega & keju parut", stock: true, bestSeller: false, prepTime: 15 },
+
+  // Paket Piknik
+  { id: 12, category: "Paket Piknik", name: "Paket Piknik Duo", price: 75000, image: "https://dummyimage.com/400x300/88a060/fff&text=Paket+Duo", description: "2 Nasi Goreng + 2 Minuman + 1 Snack pilihan", stock: true, bestSeller: true, prepTime: 20 },
+  { id: 13, category: "Paket Piknik", name: "Paket Piknik Family", price: 145000, image: "https://dummyimage.com/400x300/6a8850/fff&text=Paket+Family", description: "4 Nasi Box + 4 Minuman + 2 Snack pilihan", stock: true, bestSeller: false, prepTime: 30 },
+  { id: 14, category: "Paket Piknik", name: "Paket Romantis", price: 95000, image: "https://dummyimage.com/400x300/b07888/fff&text=Paket+Romantis", description: "Nasi Liwet for 2 + 2 Kopi Susu + dekorasi bunga", stock: true, bestSeller: false, prepTime: 25 },
+];
+
+const CATEGORIES = ["Semua", ...new Set(MENU.map(m => m.category))];
+const SERVICE_FEE = 2000;
+
+// ============================================================
+// STATE
+// ============================================================
+let cart        = {};     // { itemId: { ...menuItem, qty, notes } }
+let activeCategory = "Semua";
+let cartOpen    = false;
+let checkoutStep = "menu"; // menu | checkout | success
+let lastOrder   = null;
+
+// ============================================================
+// HELPERS
+// ============================================================
+function formatCurrency(n) {
+  return "Rp " + Number(n).toLocaleString("id-ID");
+}
+
+function cartItemCount() {
+  return Object.values(cart).reduce((s, i) => s + i.qty, 0);
+}
+
+function cartSubtotal() {
+  return Object.values(cart).reduce((s, i) => s + i.price * i.qty, 0);
+}
+
+function cartTotal() {
+  return cartSubtotal() + SERVICE_FEE;
+}
+
+function getFilteredMenu() {
+  if (activeCategory === "Semua") return MENU;
+  return MENU.filter(m => m.category === activeCategory);
+}
+
+async function generateOrderId() {
+  try {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const snap = await getDocs(query(
+      collection(db, "orders"),
+      where("createdAt", ">=", Timestamp.fromDate(today))
+    ));
+    const num = String(snap.size + 1).padStart(3, "0");
+    return `${areaCode}-${num}`;
+  } catch {
+    const num = String(Math.floor(Math.random() * 900) + 100);
+    return `${areaCode}-${num}`;
+  }
+}
+
+// ============================================================
+// CART LOGIC
+// ============================================================
+function addToCart(itemId) {
+  const item = MENU.find(m => m.id === itemId);
+  if (!item || !item.stock) return;
+  if (cart[itemId]) {
+    cart[itemId].qty++;
+  } else {
+    cart[itemId] = { ...item, qty: 1, notes: "" };
+  }
+  updateCartUI();
+  showToast(`${item.name} ditambahkan`, "success");
+}
+
+function removeFromCart(itemId) {
+  if (!cart[itemId]) return;
+  if (cart[itemId].qty > 1) {
+    cart[itemId].qty--;
+  } else {
+    delete cart[itemId];
+  }
+  updateCartUI();
+}
+
+function deleteFromCart(itemId) {
+  delete cart[itemId];
+  updateCartUI();
+}
+
+function setItemNotes(itemId, notes) {
+  if (cart[itemId]) cart[itemId].notes = notes;
+}
+
+// ============================================================
+// CHECKOUT
+// ============================================================
+async function submitOrder(customerName, customerWhatsapp, paymentMethod) {
+  const btnSubmit = document.getElementById("btn-submit-order");
+  if (btnSubmit) { btnSubmit.disabled = true; btnSubmit.textContent = "Memproses…"; }
+
+  try {
+    const orderId = await generateOrderId();
+    const items = Object.values(cart).map(i => ({
+      name: i.name, qty: i.qty, price: i.price, notes: i.notes
+    }));
+    const subtotal = cartSubtotal();
+    const total    = cartTotal();
+    const paymentStatus = paymentMethod === "QRIS" ? "PENDING" : "UNPAID";
+
+    const orderData = {
+      orderId,
+      areaCode,
+      customerName,
+      customerWhatsapp,
+      items,
+      subtotal,
+      serviceFee: SERVICE_FEE,
+      total,
+      paymentMethod,
+      paymentStatus,
+      orderStatus: "NEW",
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+      readyAt: null,
+      completedAt: null,
+      whatsappSent: false,
+    };
+
+    await setDoc(doc(collection(db, "orders")), orderData);
+
+    lastOrder = { ...orderData, orderId, total, customerName, paymentMethod, paymentStatus };
+    cart = {};
+    checkoutStep = "success";
+    renderApp();
+  } catch(e) {
+    showToast("Gagal mengirim order. Coba lagi.", "error");
+    if (btnSubmit) { btnSubmit.disabled = false; btnSubmit.textContent = "Konfirmasi Pesanan"; }
+  }
+}
+
+// ============================================================
+// TOAST
+// ============================================================
+function showToast(msg, type = "info") {
+  const colors = { success: "#16a34a", error: "#dc2626", info: "#d97706" };
+  const t = document.createElement("div");
+  t.style.cssText = `
+    position:fixed;bottom:100px;left:50%;transform:translateX(-50%) translateY(20px);
+    background:${colors[type]||colors.info};color:#fff;padding:10px 20px;
+    border-radius:12px;font-size:13px;font-weight:500;z-index:9999;
+    transition:all 0.3s;opacity:0;white-space:nowrap;box-shadow:0 4px 20px rgba(0,0,0,0.2);
+    font-family:'DM Sans',sans-serif;
+  `;
+  t.textContent = msg;
+  document.body.appendChild(t);
+  requestAnimationFrame(() => { t.style.opacity = "1"; t.style.transform = "translateX(-50%) translateY(0)"; });
+  setTimeout(() => {
+    t.style.opacity = "0";
+    t.style.transform = "translateX(-50%) translateY(20px)";
+    setTimeout(() => t.remove(), 300);
+  }, 2200);
+}
+
+// ============================================================
+// RENDER ENGINE
+// ============================================================
+function renderApp() {
+  const root = document.getElementById("app-root");
+
+  if (checkoutStep === "success") {
+    root.innerHTML = renderSuccessPage();
+    return;
+  }
+  if (checkoutStep === "checkout") {
+    root.innerHTML = renderCheckoutPage();
+    bindCheckoutEvents();
+    return;
+  }
+
+  root.innerHTML = renderMenuPage();
+  bindMenuEvents();
+  updateCartUI();
+}
+
+// ============================================================
+// SUCCESS PAGE
+// ============================================================
+function renderSuccessPage() {
+  const o = lastOrder;
+  return `
+  <div class="min-h-screen flex flex-col items-center justify-center px-4 py-12 bg-cream">
+    <div class="w-full max-w-sm">
+      <div class="text-center mb-8">
+        <div class="w-20 h-20 rounded-full bg-green-100 border-4 border-green-400 flex items-center justify-center mx-auto mb-4 text-4xl">🎉</div>
+        <div class="font-display text-2xl font-bold text-earth-800 mb-1">Pesanan Diterima!</div>
+        <div class="text-sm text-earth-500">Silahkan tunggu di area piknik Anda</div>
+      </div>
+
+      <div class="card-warm rounded-3xl p-6 mb-4 space-y-3">
+        <div class="flex justify-between">
+          <span class="text-sm text-earth-500">Nomor Order</span>
+          <span class="font-mono font-bold text-earth-900 text-lg">${o.orderId}</span>
+        </div>
+        <div class="flex justify-between">
+          <span class="text-sm text-earth-500">Area Piknik</span>
+          <span class="font-semibold text-earth-800">${o.areaCode}</span>
+        </div>
+        <div class="flex justify-between">
+          <span class="text-sm text-earth-500">Total</span>
+          <span class="font-bold text-earth-900">${formatCurrency(o.total)}</span>
+        </div>
+        <div class="flex justify-between">
+          <span class="text-sm text-earth-500">Pembayaran</span>
+          <span class="font-semibold text-earth-800">${o.paymentMethod}</span>
+        </div>
+        <div class="pt-3 border-t border-earth-200">
+          <div class="text-xs text-earth-500 text-center">Status pembayaran: <span class="font-semibold ${o.paymentStatus==="PENDING"?"text-amber-600":"text-red-500"}">${o.paymentStatus}</span></div>
+        </div>
+      </div>
+
+      <div class="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-sm text-amber-800 mb-6">
+        📍 <strong>Instruksi Pickup:</strong> Makanan akan diantar langsung ke area <strong>${o.areaCode}</strong> Anda saat sudah siap.
+      </div>
+
+      <button onclick="resetApp()" class="btn-primary w-full py-4 rounded-2xl font-semibold text-base">
+        Pesan Lagi
+      </button>
+    </div>
+  </div>`;
+}
+
+// ============================================================
+// CHECKOUT PAGE
+// ============================================================
+function renderCheckoutPage() {
+  const items = Object.values(cart);
+  const sub   = cartSubtotal();
+  const total = cartTotal();
+
+  const itemsHtml = items.map(i => `
+    <div class="flex justify-between items-center py-2 border-b border-earth-100 last:border-0">
+      <div class="flex-1 min-w-0">
+        <div class="text-sm font-medium text-earth-800 truncate">${i.qty}x ${i.name}</div>
+        ${i.notes ? `<div class="text-xs text-earth-400 italic">${i.notes}</div>` : ""}
+      </div>
+      <div class="text-sm font-semibold text-earth-700 ml-3">${formatCurrency(i.price * i.qty)}</div>
+    </div>
+  `).join("");
+
+  return `
+  <div class="min-h-screen bg-cream pb-32">
+
+    <!-- Header -->
+    <div class="sticky top-0 z-40 bg-cream/90 backdrop-blur-sm border-b border-earth-100 px-4 py-4 flex items-center gap-3">
+      <button onclick="backToMenu()" class="w-9 h-9 rounded-xl bg-earth-100 flex items-center justify-center">
+        <svg class="w-5 h-5 text-earth-700" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
+      </button>
+      <div class="font-display font-bold text-earth-900 text-lg">Checkout</div>
+    </div>
+
+    <div class="max-w-lg mx-auto px-4 py-6 space-y-5">
+
+      <!-- Order Summary -->
+      <div class="card-warm rounded-3xl p-5">
+        <div class="font-semibold text-earth-800 mb-3">Ringkasan Pesanan</div>
+        <div class="space-y-1">${itemsHtml}</div>
+        <div class="mt-3 pt-3 border-t border-earth-200 space-y-1.5">
+          <div class="flex justify-between text-sm text-earth-500">
+            <span>Subtotal</span><span>${formatCurrency(sub)}</span>
+          </div>
+          <div class="flex justify-between text-sm text-earth-500">
+            <span>Service fee</span><span>${formatCurrency(SERVICE_FEE)}</span>
+          </div>
+          <div class="flex justify-between font-bold text-earth-900 text-base pt-1">
+            <span>Total</span><span>${formatCurrency(total)}</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Customer Form -->
+      <div class="card-warm rounded-3xl p-5 space-y-4">
+        <div class="font-semibold text-earth-800">Data Pemesan</div>
+        <div>
+          <label class="text-xs text-earth-500 font-medium mb-1.5 block">Nama Lengkap *</label>
+          <input id="inp-name" type="text" placeholder="Contoh: Budi Santoso" maxlength="60"
+            class="input-field" />
+        </div>
+        <div>
+          <label class="text-xs text-earth-500 font-medium mb-1.5 block">Nomor WhatsApp *</label>
+          <input id="inp-wa" type="tel" placeholder="628xxxxxxxxxxxx" maxlength="20"
+            class="input-field" />
+          <div class="text-xs text-earth-400 mt-1">Untuk notifikasi pesanan siap</div>
+        </div>
+      </div>
+
+      <!-- Payment Method -->
+      <div class="card-warm rounded-3xl p-5">
+        <div class="font-semibold text-earth-800 mb-3">Metode Pembayaran</div>
+        <div class="space-y-2.5">
+          ${["QRIS","Cash","Transfer"].map(m => `
+          <label class="flex items-center gap-3 cursor-pointer group">
+            <input type="radio" name="payment" value="${m}" ${m==="QRIS"?"checked":""} class="w-4 h-4 accent-amber-600" />
+            <div class="flex-1">
+              <div class="text-sm font-medium text-earth-800">${m}</div>
+              <div class="text-xs text-earth-400">${m==="QRIS"?"Scan QR saat pickup":m==="Cash"?"Bayar tunai ke kasir":"Transfer bank"}</div>
+            </div>
+          </label>`).join("")}
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Bottom CTA -->
+    <div class="fixed bottom-0 left-0 right-0 bg-cream/95 backdrop-blur-sm border-t border-earth-100 px-4 py-4 safe-bottom">
+      <div class="max-w-lg mx-auto">
+        <button id="btn-submit-order" onclick="handleSubmitOrder()" class="btn-primary w-full py-4 rounded-2xl font-semibold text-base">
+          Konfirmasi Pesanan · ${formatCurrency(total)}
+        </button>
+      </div>
+    </div>
+  </div>`;
+}
+
+// ============================================================
+// MENU PAGE
+// ============================================================
+function renderMenuPage() {
+  const recommended = MENU.filter(m => m.bestSeller && m.stock).slice(0, 3);
+
+  return `
+  <div class="min-h-screen bg-cream">
+
+    <!-- Splash Header -->
+    <div class="relative overflow-hidden bg-gradient-to-br from-amber-700 via-amber-600 to-orange-500 px-5 pt-12 pb-16 text-white">
+      <div class="absolute inset-0 opacity-10" style="background-image:url('data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><circle cx=%2250%22 cy=%2250%22 r=%2250%22 fill=%22%23fff%22 opacity=%220.3%22/></svg>');background-size:80px 80px;"></div>
+      <div class="relative z-10">
+        <div class="inline-flex items-center gap-2 bg-white/20 backdrop-blur-sm rounded-full px-3 py-1.5 mb-4">
+          <span class="text-xs font-medium">🧺 Area Piknik</span>
+          <span class="font-mono font-bold text-sm">${areaCode}</span>
+        </div>
+        <div class="font-display text-3xl font-bold leading-tight mb-1">Picnic<br/>Self Order</div>
+        <div class="text-amber-100 text-sm">Pesan makanan favorit Anda 🌿</div>
+      </div>
+    </div>
+
+    <!-- Promo Banner -->
+    <div class="mx-4 -mt-6 relative z-10">
+      <div class="bg-gradient-to-r from-green-700 to-emerald-600 rounded-2xl px-4 py-3 flex items-center gap-3 shadow-lg">
+        <div class="text-2xl">🎁</div>
+        <div>
+          <div class="text-white font-semibold text-sm">Promo Hari Ini!</div>
+          <div class="text-emerald-100 text-xs">Gratis 1 Es Teh untuk setiap Paket Piknik</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="pb-40 pt-4">
+
+      <!-- Recommended -->
+      <div class="px-4 mt-4">
+        <div class="flex items-center gap-2 mb-3">
+          <span class="font-display font-bold text-earth-900 text-base">⭐ Best Seller</span>
+        </div>
+        <div class="flex gap-3 overflow-x-auto pb-2 -mx-4 px-4 snap-x scroll-smooth">
+          ${recommended.map(item => `
+          <div class="snap-start flex-shrink-0 w-48 rounded-2xl overflow-hidden bg-white shadow-md border border-earth-100">
+            <img src="${item.image}" alt="${item.name}" class="w-full h-28 object-cover" loading="lazy" />
+            <div class="p-3">
+              <div class="text-xs font-bold text-amber-700 mb-0.5">🔥 Best Seller</div>
+              <div class="text-sm font-semibold text-earth-900 leading-tight mb-1">${item.name}</div>
+              <div class="text-xs font-bold text-amber-700">${formatCurrency(item.price)}</div>
+              <button onclick="addToCart(${item.id})" class="mt-2 w-full btn-sm-primary rounded-xl py-1.5 text-xs font-semibold">
+                + Tambah
+              </button>
+            </div>
+          </div>`).join("")}
+        </div>
+      </div>
+
+      <!-- Category Tabs -->
+      <div class="px-4 mt-5">
+        <div class="flex gap-2 overflow-x-auto pb-1 -mx-4 px-4 snap-x">
+          ${CATEGORIES.map(c => `
+          <button onclick="setCategory('${c}')" data-cat="${c}"
+            class="snap-start flex-shrink-0 tab-btn ${c===activeCategory?"tab-active":""} px-4 py-2 rounded-full text-sm font-medium transition-all">
+            ${c}
+          </button>`).join("")}
+        </div>
+      </div>
+
+      <!-- Menu Grid -->
+      <div id="menu-grid" class="px-4 mt-4 grid grid-cols-2 gap-3">
+        ${getFilteredMenu().map(item => renderMenuCard(item)).join("")}
+      </div>
+
+    </div>
+
+    <!-- Cart Floating Button -->
+    <div id="cart-fab" class="fixed bottom-6 left-4 right-4 z-30 transition-all duration-300 ${cartItemCount()===0?"translate-y-24 opacity-0":"translate-y-0 opacity-100"}">
+      <button onclick="openCart()" class="w-full btn-primary py-4 rounded-2xl font-semibold text-base flex items-center justify-between px-5 shadow-xl">
+        <div class="flex items-center gap-2">
+          <div class="bg-white/20 rounded-lg w-7 h-7 flex items-center justify-center">
+            <span class="text-sm font-bold" id="cart-qty">${cartItemCount()}</span>
+          </div>
+          <span>Lihat Keranjang</span>
+        </div>
+        <span id="cart-total-fab">${formatCurrency(cartTotal())}</span>
+      </button>
+    </div>
+
+    <!-- Cart Drawer Backdrop -->
+    <div id="cart-backdrop" onclick="closeCart()" class="fixed inset-0 bg-black/40 z-40 transition-opacity duration-300 ${cartOpen?"opacity-100":"opacity-0 pointer-events-none"}"></div>
+
+    <!-- Cart Drawer -->
+    <div id="cart-drawer" class="fixed bottom-0 left-0 right-0 z-50 bg-white rounded-t-3xl shadow-2xl transition-transform duration-300 ${cartOpen?"translate-y-0":"translate-y-full"}" style="max-height:85vh;overflow-y:auto;">
+      <div class="sticky top-0 bg-white px-5 pt-4 pb-3 border-b border-earth-100">
+        <div class="w-10 h-1 bg-earth-200 rounded-full mx-auto mb-3"></div>
+        <div class="flex items-center justify-between">
+          <div class="font-display font-bold text-earth-900 text-lg">Keranjang</div>
+          <button onclick="closeCart()" class="text-earth-400 text-2xl leading-none">×</button>
+        </div>
+      </div>
+
+      <div id="cart-items-list" class="px-5 py-4 space-y-3">
+        ${renderCartItems()}
+      </div>
+
+      ${cartItemCount() > 0 ? `
+      <div class="px-5 pb-6 pt-2 border-t border-earth-100">
+        <div class="space-y-2 mb-4">
+          <div class="flex justify-between text-sm text-earth-500">
+            <span>Subtotal</span><span>${formatCurrency(cartSubtotal())}</span>
+          </div>
+          <div class="flex justify-between text-sm text-earth-500">
+            <span>Service fee</span><span>${formatCurrency(SERVICE_FEE)}</span>
+          </div>
+          <div class="flex justify-between font-bold text-earth-900 text-base">
+            <span>Total</span><span>${formatCurrency(cartTotal())}</span>
+          </div>
+        </div>
+        <button onclick="goToCheckout()" class="btn-primary w-full py-4 rounded-2xl font-semibold text-base">
+          Lanjut Checkout
+        </button>
+      </div>` : `
+      <div class="py-12 text-center">
+        <div class="text-5xl mb-3">🧺</div>
+        <div class="text-earth-500 text-sm">Keranjang masih kosong</div>
+      </div>`}
+    </div>
+
+  </div>`;
+}
+
+function renderMenuCard(item) {
+  const inCart = cart[item.id];
+  return `
+  <div class="rounded-2xl overflow-hidden bg-white shadow-sm border border-earth-100 ${!item.stock?"opacity-60":""}">
+    <div class="relative">
+      <img src="${item.image}" alt="${item.name}" class="w-full h-32 object-cover" loading="lazy" />
+      ${item.bestSeller ? `<span class="absolute top-2 left-2 bg-amber-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">🔥 Best</span>` : ""}
+      ${!item.stock ? `<div class="absolute inset-0 bg-white/60 flex items-center justify-center"><span class="bg-white text-earth-500 text-xs font-semibold px-3 py-1 rounded-full shadow">Habis</span></div>` : ""}
+      <div class="absolute top-2 right-2 bg-white/80 backdrop-blur-sm text-earth-600 text-[10px] font-medium px-1.5 py-0.5 rounded-full">~${item.prepTime}m</div>
+    </div>
+    <div class="p-3">
+      <div class="text-sm font-semibold text-earth-900 leading-tight mb-0.5 line-clamp-1">${item.name}</div>
+      <div class="text-xs text-earth-400 mb-2 line-clamp-1">${item.description}</div>
+      <div class="flex items-center justify-between">
+        <div class="text-sm font-bold text-amber-700">${formatCurrency(item.price)}</div>
+        ${item.stock ? (inCart
+          ? `<div class="flex items-center gap-1.5">
+              <button onclick="removeFromCart(${item.id})" class="w-6 h-6 rounded-lg bg-earth-100 text-earth-700 flex items-center justify-center font-bold text-base leading-none">−</button>
+              <span class="font-mono font-bold text-earth-900 text-sm w-5 text-center">${inCart.qty}</span>
+              <button onclick="addToCart(${item.id})" class="w-6 h-6 rounded-lg bg-amber-500 text-white flex items-center justify-center font-bold text-base leading-none">+</button>
+            </div>`
+          : `<button onclick="addToCart(${item.id})" class="btn-sm-primary px-3 py-1.5 rounded-xl text-xs font-semibold">+ Tambah</button>`
+        ) : ""}
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderCartItems() {
+  const items = Object.values(cart);
+  if (items.length === 0) return "";
+  return items.map(i => `
+    <div class="flex gap-3 items-start">
+      <img src="${i.image}" class="w-14 h-14 rounded-xl object-cover flex-shrink-0" />
+      <div class="flex-1 min-w-0">
+        <div class="text-sm font-semibold text-earth-900 line-clamp-1">${i.name}</div>
+        <div class="text-xs font-bold text-amber-700 mt-0.5">${formatCurrency(i.price)}</div>
+        <input type="text" placeholder="Catatan (opsional)…" value="${i.notes}"
+          oninput="setItemNotes(${i.id}, this.value)"
+          class="mt-1.5 w-full text-xs border border-earth-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-amber-400 bg-earth-50" />
+        <div class="flex items-center gap-2 mt-2">
+          <button onclick="removeFromCart(${i.id}); updateCartUI();" class="w-7 h-7 rounded-lg bg-earth-100 text-earth-700 flex items-center justify-center font-bold">−</button>
+          <span class="font-mono font-bold text-earth-900 w-5 text-center">${i.qty}</span>
+          <button onclick="addToCart(${i.id}); updateCartUI();" class="w-7 h-7 rounded-lg bg-amber-500 text-white flex items-center justify-center font-bold">+</button>
+          <button onclick="deleteFromCart(${i.id}); updateCartUI();" class="ml-auto text-xs text-red-400 hover:text-red-600">Hapus</button>
+        </div>
+      </div>
+    </div>
+  `).join("");
+}
+
+// ============================================================
+// UI UPDATE
+// ============================================================
+function updateCartUI() {
+  const count = cartItemCount();
+  const total = cartTotal();
+
+  // FAB
+  const fab = document.getElementById("cart-fab");
+  if (fab) {
+    if (count === 0) { fab.classList.add("translate-y-24","opacity-0"); fab.classList.remove("translate-y-0","opacity-100"); }
+    else             { fab.classList.remove("translate-y-24","opacity-0"); fab.classList.add("translate-y-0","opacity-100"); }
+  }
+  const qtyEl = document.getElementById("cart-qty");
+  if (qtyEl) qtyEl.textContent = count;
+  const totEl = document.getElementById("cart-total-fab");
+  if (totEl) totEl.textContent = formatCurrency(total);
+
+  // Re-render menu cards (for +/- buttons)
+  const grid = document.getElementById("menu-grid");
+  if (grid) grid.innerHTML = getFilteredMenu().map(item => renderMenuCard(item)).join("");
+
+  // Cart drawer items
+  const list = document.getElementById("cart-items-list");
+  if (list) {
+    list.innerHTML = renderCartItems();
+    if (count === 0) closeCart();
+  }
+}
+
+function openCart()  { cartOpen = true;  document.getElementById("cart-drawer")?.classList.remove("translate-y-full"); document.getElementById("cart-drawer")?.classList.add("translate-y-0"); document.getElementById("cart-backdrop")?.classList.remove("opacity-0","pointer-events-none"); document.getElementById("cart-backdrop")?.classList.add("opacity-100"); }
+function closeCart() { cartOpen = false; document.getElementById("cart-drawer")?.classList.add("translate-y-full"); document.getElementById("cart-drawer")?.classList.remove("translate-y-0"); document.getElementById("cart-backdrop")?.classList.add("opacity-0","pointer-events-none"); document.getElementById("cart-backdrop")?.classList.remove("opacity-100"); }
+function goToCheckout() { if (cartItemCount()===0) return; checkoutStep = "checkout"; renderApp(); }
+function backToMenu()   { checkoutStep = "menu"; renderApp(); }
+function resetApp()     { checkoutStep = "menu"; lastOrder = null; cart = {}; renderApp(); }
+function setCategory(c) { activeCategory = c; document.getElementById("menu-grid").innerHTML = getFilteredMenu().map(item => renderMenuCard(item)).join(""); document.querySelectorAll(".tab-btn").forEach(b => { b.classList.toggle("tab-active", b.dataset.cat === c); b.classList.toggle("tab-inactive", b.dataset.cat !== c); }); }
+
+// ============================================================
+// BIND EVENTS (only needed for checkout page)
+// ============================================================
+function bindMenuEvents() {}
+function bindCheckoutEvents() {
+  window.handleSubmitOrder = async function() {
+    const name = document.getElementById("inp-name")?.value.trim();
+    const wa   = document.getElementById("inp-wa")?.value.trim();
+    const pm   = document.querySelector("input[name='payment']:checked")?.value || "QRIS";
+    if (!name) { showToast("Nama harus diisi", "error"); return; }
+    if (!wa || wa.length < 8) { showToast("WhatsApp harus diisi dengan benar", "error"); return; }
+    await submitOrder(name, wa, pm);
+  };
+}
+
+// ============================================================
+// INIT
+// ============================================================
+window.addToCart      = addToCart;
+window.removeFromCart = removeFromCart;
+window.deleteFromCart = deleteFromCart;
+window.setItemNotes   = setItemNotes;
+window.openCart       = openCart;
+window.closeCart      = closeCart;
+window.goToCheckout   = goToCheckout;
+window.backToMenu     = backToMenu;
+window.resetApp       = resetApp;
+window.setCategory    = setCategory;
+
+document.addEventListener("DOMContentLoaded", () => {
+  renderApp();
+});
+</script>
+
+<style>
+  :root {
+    --font-display: 'Playfair Display', serif;
+    --font-mono: 'DM Mono', monospace;
+    --font-body: 'DM Sans', sans-serif;
+    --cream: #f7f2e8;
+    --earth-50: #faf7f0;
+    --earth-100: #ede8db;
+    --earth-200: #ddd4c2;
+    --earth-400: #9c8e78;
+    --earth-500: #7a6e5c;
+    --earth-700: #4a4035;
+    --earth-800: #3a3028;
+    --earth-900: #2a221c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: var(--font-body);
+    background: var(--cream);
+    color: var(--earth-800);
+    -webkit-tap-highlight-color: transparent;
+  }
+  .font-display { font-family: var(--font-display); }
+  .font-mono    { font-family: var(--font-mono); }
+  .bg-cream     { background-color: var(--cream); }
+
+  .card-warm {
+    background: #fff;
+    border: 1px solid var(--earth-100);
+    box-shadow: 0 2px 12px rgba(80,60,40,0.06);
+  }
+
+  .input-field {
+    width: 100%;
+    border: 1.5px solid var(--earth-200);
+    border-radius: 12px;
+    padding: 12px 14px;
+    font-size: 14px;
+    font-family: var(--font-body);
+    background: var(--earth-50);
+    color: var(--earth-900);
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  .input-field:focus { border-color: #d97706; }
+
+  .btn-primary {
+    background: linear-gradient(135deg, #b45309, #d97706);
+    color: #fff;
+    font-family: var(--font-body);
+    cursor: pointer;
+    border: none;
+    transition: all 0.15s;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .btn-primary:active { transform: scale(0.97); }
+
+  .btn-sm-primary {
+    background: #d97706;
+    color: #fff;
+    font-family: var(--font-body);
+    cursor: pointer;
+    border: none;
+    transition: all 0.15s;
+  }
+
+  .tab-btn {
+    font-family: var(--font-body);
+    border: 1.5px solid transparent;
+    background: #fff;
+    color: var(--earth-500);
+    cursor: pointer;
+  }
+  .tab-active {
+    background: #d97706 !important;
+    color: #fff !important;
+    border-color: #b45309 !important;
+  }
+
+  .line-clamp-1 {
+    display: -webkit-box;
+    -webkit-line-clamp: 1;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  .safe-bottom {
+    padding-bottom: max(16px, env(safe-area-inset-bottom));
+  }
+
+  ::-webkit-scrollbar { height: 3px; width: 3px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--earth-200); border-radius: 2px; }
+</style>
+</head>
+<body>
+  <div id="app-root"></div>
+</body>
+</html>
