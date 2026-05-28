@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Sawah Senja — Dashboard</title>
+<title>Sawah Senja - Dashboard</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@600;700;800&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet" />
 
@@ -33,7 +33,7 @@ const auth = getAuth(app);
 const db   = getFirestore(app);
 
 // ============================================================
-// STATE — App
+// STATE - App
 // ============================================================
 let allOrders     = [];
 let activeFilter  = "ALL";
@@ -103,7 +103,7 @@ function playChime() {
 }
 
 // ============================================================
-// AUTH — State observer
+// AUTH - State observer
 // Ditunda sampai DOM ready agar getElementById tidak null
 // ============================================================
 let domReady = false;
@@ -129,7 +129,7 @@ function handleAuthChange(user) {
 }
 
 // ============================================================
-// AUTH — Login
+// AUTH - Login
 // ============================================================
 async function doLogin() {
   const email    = document.getElementById("inp-email")?.value.trim();
@@ -175,7 +175,7 @@ async function doLogout() {
 }
 
 // ============================================================
-// AUTH — Screens
+// AUTH - Screens
 // ============================================================
 function showLoginScreen() {
   document.getElementById("screen-login").style.display = "flex";
@@ -274,7 +274,7 @@ async function updateStatus(orderId, newStatus) {
 function sendWhatsApp(order) {
   const phone = String(order.customerWhatsapp).replace(/\D/g, "");
   const msg   = encodeURIComponent(
-    `Halo ${order.customerName} 👋\nPesanan Anda nomor *${order.orderId}* sudah siap diambil.\nTerima kasih — Sawah Senja 🌾`
+    `Halo ${order.customerName} 👋\nPesanan Anda nomor *${order.orderId}* sudah siap diambil.\nTerima kasih - Sawah Senja 🌾`
   );
   window.open(`https://wa.me/${phone}?text=${msg}`, "_blank");
   updateDoc(doc(db, "orders", order.id), { whatsappSent: true }).catch(() => {});
@@ -322,7 +322,7 @@ function countByStatus(s) {
 }
 
 // ============================================================
-// RENDER — HEADER STATS
+// RENDER - HEADER STATS
 // ============================================================
 function renderHeaderStats() {
   const a = calcAnalytics();
@@ -344,7 +344,7 @@ function renderFilterBadges() {
 }
 
 // ============================================================
-// RENDER — ORDERS
+// RENDER - ORDERS
 // ============================================================
 function renderOrders() {
   const grid     = document.getElementById("orders-grid");
@@ -442,7 +442,7 @@ function buildCard(o) {
 }
 
 // ============================================================
-// RENDER — MENU MANAGER
+// RENDER - MENU MANAGER
 // ============================================================
 function renderMenuManager() {
   const panel = document.getElementById("menu-manager-panel");
@@ -487,10 +487,12 @@ function buildMenuRow(item) {
 
   return `
   <div class="flex items-center gap-3 bg-zinc-900/60 border border-zinc-800/60 rounded-xl px-4 py-3 hover:border-zinc-700 transition-all">
-    <div class="w-10 h-10 rounded-xl overflow-hidden flex-shrink-0 bg-zinc-800">
+    <div class="w-14 h-14 rounded-xl overflow-hidden flex-shrink-0 bg-zinc-800 border border-zinc-700" style="position:relative;">
       ${item.image
-        ? `<img src="${item.image}" class="w-full h-full object-cover" loading="lazy" onerror="this.style.display='none'" />`
-        : `<div class="w-full h-full flex items-center justify-center text-lg">🍽️</div>`}
+        ? `<img src="${item.image}" class="w-full h-full" style="object-fit:cover;display:block;" loading="lazy"
+               onerror="this.style.display='none';this.nextElementSibling.style.display='flex'" />
+           <div style="display:none;position:absolute;inset:0;align-items:center;justify-content:center;font-size:20px;">🍽️</div>`
+        : `<div style="display:flex;align-items:center;justify-content:center;width:100%;height:100%;font-size:20px;">🍽️</div>`}
     </div>
     <div class="flex-1 min-w-0">
       <div class="flex items-center gap-2 flex-wrap">
@@ -571,6 +573,44 @@ async function saveMenuItem(fd) {
 }
 
 // ============================================================
+// SEED DEFAULT MENU - push 10 menu Sawah Senja ke Firestore
+// ============================================================
+const DEFAULT_MENU = [
+  { name:"Sate Taichan",             category:"Sate",     price:18000, description:"Sate ayam bakar bumbu taichan pedas segar",          image:"", stock:true,  bestSeller:true,  prepTime:10 },
+  { name:"Sate Maranggi",            category:"Sate",     price:18000, description:"Sate sapi khas Purwakarta bumbu kecap manis",         image:"", stock:true,  bestSeller:true,  prepTime:10 },
+  { name:"Sate Madura",              category:"Sate",     price:18000, description:"Sate ayam bumbu kacang khas Madura",                 image:"", stock:true,  bestSeller:false, prepTime:10 },
+  { name:"Mix Platter Saus Tartar",  category:"Sate",     price:18000, description:"Mix sate pilihan dengan saus tartar spesial",        image:"", stock:true,  bestSeller:true,  prepTime:12 },
+  { name:"Gorengan Saus Asam Pedas", category:"Gorengan", price:12000, description:"Gorengan crispy saus asam pedas segar",              image:"", stock:true,  bestSeller:false, prepTime:8  },
+  { name:"Gorengan Saus Kacang",     category:"Gorengan", price:12000, description:"Gorengan crispy saus kacang gurih",                  image:"", stock:true,  bestSeller:false, prepTime:8  },
+  { name:"Kopi Susu SS",             category:"Minuman",  price:10000, description:"Kopi susu signature Sawah Senja",                    image:"", stock:true,  bestSeller:true,  prepTime:5  },
+  { name:"Kopi SS",                  category:"Minuman",  price:10000, description:"Kopi hitam signature Sawah Senja",                   image:"", stock:true,  bestSeller:false, prepTime:4  },
+  { name:"Teh",                      category:"Minuman",  price:6000,  description:"Teh hangat atau dingin",                             image:"", stock:true,  bestSeller:false, prepTime:3  },
+  { name:"Jeruk",                    category:"Minuman",  price:8000,  description:"Jeruk peras segar hangat atau dingin",               image:"", stock:true,  bestSeller:false, prepTime:4  },
+];
+
+async function seedDefaultMenu() {
+  if (menuItems.length > 0) {
+    if (!confirm(`Menu sudah ada ${menuItems.length} item. Tetap tambahkan menu default? Item yang sudah ada tidak akan dihapus.`)) return;
+  }
+  const btn = document.getElementById("btn-seed-menu");
+  if (btn) { btn.disabled = true; btn.textContent = "Menyimpan…"; }
+  try {
+    const batch = DEFAULT_MENU.map(item => setDoc(doc(collection(db, "menu")), {
+      ...item,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    }));
+    await Promise.all(batch);
+    showToast(`${DEFAULT_MENU.length} menu default berhasil ditambahkan!`, "success");
+  } catch(e) {
+    console.error(e);
+    showToast("Gagal seed menu: " + e.message, "error");
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "🌾 Seed Menu Default"; }
+  }
+}
+
+// ============================================================
 // MENU MODAL
 // ============================================================
 function openMenuModal(item = null) {
@@ -578,7 +618,7 @@ function openMenuModal(item = null) {
   menuModalOpen  = true;
   document.getElementById("menu-modal-title").textContent = item ? "Edit Item Menu" : "Tambah Item Menu";
   document.getElementById("mf-name").value        = item?.name        || "";
-  document.getElementById("mf-category").value    = item?.category    || "Makanan";
+  document.getElementById("mf-category").value    = item?.category    || "Sate";
   document.getElementById("mf-price").value       = item?.price       || "";
   document.getElementById("mf-description").value = item?.description || "";
   document.getElementById("mf-image").value       = item?.image       || "";
@@ -586,10 +626,34 @@ function openMenuModal(item = null) {
   document.getElementById("mf-stock").value       = item?.stock === false ? "false" : "true";
   document.getElementById("mf-bestseller").checked = item?.bestSeller || false;
 
+  // Live image preview
+  updateImagePreview(item?.image || "");
+
   const modal = document.getElementById("menu-modal");
   modal.classList.remove("hidden");
   requestAnimationFrame(() => modal.classList.add("modal-visible"));
   document.getElementById("mf-name").focus();
+}
+
+function updateImagePreview(url) {
+  const preview = document.getElementById("mf-img-preview");
+  const placeholder = document.getElementById("mf-img-placeholder");
+  if (!preview || !placeholder) return;
+  const clean = url.trim();
+  if (clean) {
+    preview.src = clean;
+    preview.style.display = "block";
+    placeholder.style.display = "none";
+    preview.onerror = () => {
+      preview.style.display = "none";
+      placeholder.style.display = "flex";
+      placeholder.textContent = "⚠ URL tidak valid";
+    };
+  } else {
+    preview.style.display = "none";
+    placeholder.style.display = "flex";
+    placeholder.textContent = "Preview gambar";
+  }
 }
 
 function closeMenuModal() {
@@ -640,7 +704,7 @@ function startClock() {
 }
 
 // ============================================================
-// INIT — hanya bind event statis; listener & auth dikelola sendiri
+// INIT - hanya bind event statis; listener & auth dikelola sendiri
 // ============================================================
 document.addEventListener("DOMContentLoaded", () => {
   domReady = true;
@@ -686,6 +750,13 @@ document.addEventListener("DOMContentLoaded", () => {
   // Main tabs
   document.getElementById("tab-orders").addEventListener("click", () => switchTab("orders"));
   document.getElementById("tab-menu").addEventListener("click",   () => switchTab("menu"));
+
+  // Expose updateImagePreview globally (called from oninput)
+  window.updateImagePreview = updateImagePreview;
+
+  // Seed default menu
+  // (btn-seed-menu uses onclick attr, seedDefaultMenu already exposed via module - expose it)
+  window.seedDefaultMenu = seedDefaultMenu;
 
   // Menu modal
   document.getElementById("btn-add-menu").addEventListener("click", () => openMenuModal(null));
@@ -909,7 +980,7 @@ document.addEventListener("DOMContentLoaded", () => {
     </div>
 
     <div class="text-center mt-6 text-xs text-zinc-600">
-      Akses terbatas — staff & admin saja
+      Akses terbatas - staff & admin saja
     </div>
   </div>
 </div>
@@ -1073,16 +1144,22 @@ document.addEventListener("DOMContentLoaded", () => {
 
     <!-- ===== MENU MANAGER SECTION ===== -->
     <div id="menu-section" style="display:none;">
-      <div class="flex items-center justify-between mb-5">
+      <div class="flex items-start justify-between gap-3 mb-5 flex-wrap">
         <div>
           <div class="font-display font-bold text-white text-lg">Kelola Menu</div>
-          <div class="text-zinc-500 text-sm mt-0.5">Menu ini tampil di halaman order customer.</div>
+          <div class="text-zinc-500 text-sm mt-0.5">Menu ini tampil realtime di halaman order customer.</div>
         </div>
-        <button id="btn-add-menu"
-          class="flex items-center gap-2 bg-orange-500 hover:bg-orange-400 text-black font-semibold text-sm px-4 py-2.5 rounded-xl transition-all active:scale-95">
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg>
-          Tambah Item
-        </button>
+        <div class="flex gap-2 flex-wrap">
+          <button id="btn-seed-menu" onclick="seedDefaultMenu()"
+            class="flex items-center gap-1.5 bg-zinc-700 hover:bg-zinc-600 text-zinc-200 font-semibold text-sm px-3 py-2.5 rounded-xl transition-all active:scale-95 border border-zinc-600">
+            🌾 Seed Menu Default
+          </button>
+          <button id="btn-add-menu"
+            class="flex items-center gap-2 bg-orange-500 hover:bg-orange-400 text-black font-semibold text-sm px-4 py-2.5 rounded-xl transition-all active:scale-95">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg>
+            Tambah Item
+          </button>
+        </div>
       </div>
       <div id="menu-manager-panel" class="space-y-2">
         <div class="flex flex-col items-center py-16 text-center">
@@ -1108,25 +1185,35 @@ document.addEventListener("DOMContentLoaded", () => {
       </div>
       <div class="px-6 py-5 space-y-4">
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+
+          <!-- Nama -->
           <div class="sm:col-span-2">
             <label class="form-label">Nama Item *</label>
-            <input id="mf-name" type="text" placeholder="cth: Nasi Goreng Special" class="form-input" maxlength="80" />
+            <input id="mf-name" type="text" placeholder="cth: Sate Taichan" class="form-input" maxlength="80" />
           </div>
+
+          <!-- Kategori -->
           <div>
             <label class="form-label">Kategori *</label>
             <select id="mf-category" class="form-input">
+              <option value="Sate">Sate</option>
+              <option value="Gorengan">Gorengan</option>
               <option value="Makanan">Makanan</option>
               <option value="Minuman">Minuman</option>
               <option value="Snack">Snack</option>
-              <option value="Paket Piknik">Paket Piknik</option>
+              <option value="Paket Senja">Paket Senja</option>
               <option value="Dessert">Dessert</option>
               <option value="Lainnya">Lainnya</option>
             </select>
           </div>
+
+          <!-- Harga -->
           <div>
             <label class="form-label">Harga (Rp) *</label>
-            <input id="mf-price" type="number" placeholder="25000" min="0" class="form-input" />
+            <input id="mf-price" type="number" placeholder="18000" min="0" class="form-input" />
           </div>
+
+          <!-- Stok -->
           <div>
             <label class="form-label">Status Stok</label>
             <select id="mf-stock" class="form-input">
@@ -1134,27 +1221,48 @@ document.addEventListener("DOMContentLoaded", () => {
               <option value="false">❌ Habis</option>
             </select>
           </div>
+
+          <!-- Prep time -->
           <div>
             <label class="form-label">Estimasi Waktu (menit)</label>
             <input id="mf-preptime" type="number" placeholder="10" min="0" max="120" class="form-input" />
           </div>
+
+          <!-- Deskripsi -->
           <div class="sm:col-span-2">
             <label class="form-label">Deskripsi</label>
             <textarea id="mf-description" rows="2" placeholder="Deskripsi singkat menu..." maxlength="200" class="form-input resize-none"></textarea>
           </div>
+
+          <!-- Gambar URL + live preview -->
           <div class="sm:col-span-2">
-            <label class="form-label">URL Gambar</label>
-            <input id="mf-image" type="url" placeholder="https://..." class="form-input" />
+            <label class="form-label">Link Gambar (URL)</label>
+            <input id="mf-image" type="url" placeholder="https://..." class="form-input"
+              oninput="updateImagePreview(this.value)" />
+            <div class="mt-3 rounded-xl overflow-hidden bg-zinc-800 border border-zinc-700" style="height:160px;position:relative;">
+              <img id="mf-img-preview" src="" alt="preview"
+                style="display:none;width:100%;height:100%;object-fit:cover;" />
+              <div id="mf-img-placeholder"
+                style="display:flex;align-items:center;justify-content:center;height:100%;
+                       color:#52525b;font-size:13px;font-family:var(--font-body);gap:6px;">
+                <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M3 16l5-5 4 4 3-3 6 6"/><circle cx="8.5" cy="8.5" r="1.5"/></svg>
+                Preview gambar
+              </div>
+            </div>
+            <div class="text-xs text-zinc-600 mt-1.5">Paste URL gambar dari internet. Gambar akan otomatis fit di semua ukuran.</div>
           </div>
+
+          <!-- Best seller -->
           <div class="sm:col-span-2">
-            <label class="flex items-center gap-3 cursor-pointer">
+            <label class="flex items-center gap-3 cursor-pointer p-3 rounded-xl bg-zinc-900 border border-zinc-800 hover:border-zinc-700 transition-all">
               <input id="mf-bestseller" type="checkbox" class="w-4 h-4 accent-orange-500 rounded" />
               <div>
                 <div class="text-sm font-medium text-zinc-300">🔥 Tandai sebagai Best Seller</div>
-                <div class="text-xs text-zinc-600">Tampil di bagian rekomendasi halaman customer</div>
+                <div class="text-xs text-zinc-600 mt-0.5">Tampil di bagian rekomendasi utama halaman customer</div>
               </div>
             </label>
           </div>
+
         </div>
       </div>
       <div class="sticky bottom-0 bg-zinc-950 border-t border-zinc-800/60 px-6 py-4 flex gap-3">
