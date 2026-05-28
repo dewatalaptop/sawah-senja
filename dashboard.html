@@ -203,6 +203,14 @@ async function updateStatus(orderId, newStatus) {
   } catch(e){ showToast("Gagal update status","error"); }
 }
 
+async function deleteOrder(orderId, orderLabel) {
+  if(!confirm(`Hapus order ${orderLabel}? Data tidak bisa dikembalikan.`)) return;
+  try {
+    await deleteDoc(doc(db,"orders",orderId));
+    showToast(`Order ${orderLabel} dihapus`,"info");
+  } catch(e){ showToast("Gagal hapus order","error"); }
+}
+
 // ── WhatsApp - with full order detail ────────────────────────
 function sendWhatsApp(order) {
   const phone=String(order.customerWhatsapp).replace(/\D/g,"");
@@ -253,6 +261,18 @@ function getFilteredOrders() {
 
 function countByStatus(s){ return allOrders.filter(o=>s==="ALL"||o.orderStatus===s).length; }
 
+// ── Bulk delete DONE orders ──────────────────────────────────
+async function deleteAllDone() {
+  const doneOrders = allOrders.filter(o => o.orderStatus === "DONE");
+  if (doneOrders.length === 0) { showToast("Tidak ada order selesai","info"); return; }
+  if (!confirm(`Hapus ${doneOrders.length} order yang sudah selesai? Tindakan ini tidak bisa dibatalkan.`)) return;
+  try {
+    await Promise.all(doneOrders.map(o => deleteDoc(doc(db,"orders",o.id))));
+    showToast(`${doneOrders.length} order selesai dihapus`,"success");
+  } catch(e) { showToast("Gagal hapus: "+e.message,"error"); }
+}
+window.deleteAllDone = deleteAllDone;
+
 // ── Render: Header ────────────────────────────────────────────
 function renderHeaderStats() {
   const a=calcAnalytics();
@@ -263,6 +283,20 @@ function renderHeaderStats() {
 
 function renderFilterBadges() {
   ["ALL","NEW","COOKING","READY","DONE"].forEach(s=>{const el=document.getElementById("badge-"+s);if(el)el.textContent=countByStatus(s);});
+  // Show/hide bulk delete button based on DONE count
+  const doneCount = countByStatus("DONE");
+  const btnDel = document.getElementById("btn-delete-done");
+  if (btnDel) {
+    if (doneCount > 0) {
+      btnDel.classList.remove("hidden");
+      btnDel.querySelector("svg+span") && (btnDel.lastChild.textContent = `Hapus Semua Selesai (${doneCount})`);
+      // Update text with count
+      const textNode = [...btnDel.childNodes].find(n => n.nodeType === 3 || (n.tagName && n.tagName !== "SVG"));
+      btnDel.innerHTML = btnDel.innerHTML.replace(/Hapus Semua Selesai(\s*\(\d+\))?/, `Hapus Semua Selesai (${doneCount})`);
+    } else {
+      btnDel.classList.add("hidden");
+    }
+  }
 }
 
 // ── Render: Orders ────────────────────────────────────────────
@@ -285,6 +319,7 @@ function renderOrders() {
       if(action==="mark-ready")     updateStatus(id,"READY");
       if(action==="complete-order") updateStatus(id,"DONE");
       if(action==="send-wa")        sendWhatsApp(order);
+      if(action==="delete-order")   deleteOrder(id, btn.dataset.label);
     });
   });
 }
@@ -343,12 +378,27 @@ function buildCard(o) {
           <div class="text-[10px] text-slate-400 uppercase tracking-wide font-semibold">Total</div>
           <div class="text-base font-bold text-slate-900">${fmt(o.total||0)}</div>
         </div>
-        <div class="text-right">
-          <div class="text-[10px] text-slate-400 uppercase tracking-wide font-semibold">Menunggu</div>
-          <div class="text-sm font-mono font-semibold ${elapsed>15?"text-red-500":elapsed>8?"text-amber-500":"text-slate-400"}">${elapsed} mnt</div>
-        </div>
+        ${o.orderStatus==="DONE"
+          ? `<div class="text-right">
+               <div class="text-[10px] text-slate-400 uppercase tracking-wide font-semibold">Selesai</div>
+               <div class="text-sm font-mono text-slate-400">${fmtTime(o.completedAt||o.updatedAt||o.createdAt)}</div>
+             </div>`
+          : `<div class="text-right">
+               <div class="text-[10px] text-slate-400 uppercase tracking-wide font-semibold">Menunggu</div>
+               <div class="text-sm font-mono font-semibold ${elapsed>15?"text-red-500":elapsed>8?"text-amber-500":"text-slate-400"}">${elapsed} mnt</div>
+             </div>`
+        }
       </div>
-      <div class="flex gap-2 flex-wrap">${actionBtn}${waBtn}</div>
+      <div class="flex gap-2 flex-wrap items-center">
+        ${actionBtn}${waBtn}
+        ${o.orderStatus==="DONE"
+          ? `<button data-action="delete-order" data-id="${o.id}" data-label="${o.orderId||o.id}"
+               class="act-btn act-btn--delete ml-auto">
+               <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+               Hapus
+             </button>`
+          : ""}
+      </div>
     </div>
   </div>`;
 }
@@ -802,6 +852,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);}
 .act-btn--green{background:#d1fae5;color:#065f46;border:1.5px solid #6ee7b7;} .act-btn--green:hover{background:#a7f3d0;}
 .act-btn--slate{background:var(--bg);color:var(--text2);border:1.5px solid var(--border2);} .act-btn--slate:hover{background:var(--border);}
 .act-btn--wa{background:#dcfce7;color:#15803d;border:1.5px solid #86efac;} .act-btn--wa:hover{background:#bbf7d0;}
+.act-btn--delete{background:#f8fafc;color:#94a3b8;border:1.5px solid #e2e8f0;} .act-btn--delete:hover{background:#fee2e2;color:#dc2626;border-color:#fca5a5;}
 .avatar{width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,var(--orange),var(--orange2));display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;color:#fff;flex-shrink:0;}
 
 /* SKELETON */
@@ -935,18 +986,23 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);}
     <!-- ORDERS -->
     <div id="orders-section">
       <div class="flex flex-col sm:flex-row gap-3 items-start sm:items-center mb-4">
-        <div class="flex gap-2 overflow-x-auto pb-1 flex-shrink-0">
+        <div class="flex gap-2 overflow-x-auto pb-1 flex-shrink-0 items-center">
           <button class="filter-tab filter-active" data-filter="ALL">Semua <span id="badge-ALL" class="ml-1 font-mono text-[10px]">0</span></button>
           <button class="filter-tab" data-filter="NEW"><span class="text-red-400">●</span> Baru <span id="badge-NEW" class="ml-1 font-mono text-[10px]">0</span></button>
           <button class="filter-tab" data-filter="COOKING"><span class="text-amber-400">●</span> Masak <span id="badge-COOKING" class="ml-1 font-mono text-[10px]">0</span></button>
           <button class="filter-tab" data-filter="READY"><span class="text-emerald-500">●</span> Siap <span id="badge-READY" class="ml-1 font-mono text-[10px]">0</span></button>
           <button class="filter-tab" data-filter="DONE"><span class="text-slate-300">●</span> Selesai <span id="badge-DONE" class="ml-1 font-mono text-[10px]">0</span></button>
         </div>
-        <div class="flex-1 w-full sm:max-w-xs">
-          <div class="search-wrap">
+        <div class="flex items-center gap-2 flex-1 w-full">
+          <div class="search-wrap flex-1 sm:max-w-xs">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
             <input id="search-input" type="text" placeholder="Cari order, nama, area…" class="search-input"/>
           </div>
+          <button onclick="deleteAllDone()" id="btn-delete-done"
+            class="flex-shrink-0 flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-xl border border-slate-200 bg-white text-slate-500 hover:bg-red-50 hover:text-red-500 hover:border-red-200 transition-all hidden">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+            Hapus Semua Selesai
+          </button>
         </div>
       </div>
       <div id="skeleton-state" class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
