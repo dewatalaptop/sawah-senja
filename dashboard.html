@@ -3,10 +3,165 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-<title>Sawah Senja - Dashboard</title>
+<title>Sawah Senja — Dashboard</title>
 <script src="https://cdn.tailwindcss.com"></script>
-<script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js" defer></script>
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet"/>
+
+<script>
+// ── Error Console — tangkap semua error sebelum module load ──
+window.__ERRORS__ = [];
+window.__LOGS__   = [];
+
+function __captureError__(msg, src, line, col, err) {
+  const entry = {
+    type: "ERROR",
+    time: new Date().toLocaleTimeString("id-ID"),
+    msg:  String(msg),
+    src:  src ? src.replace(window.location.origin,"") : "",
+    line: line || "",
+    col:  col  || "",
+    stack: err && err.stack ? err.stack.split("\n").slice(0,4).join(" | ") : ""
+  };
+  window.__ERRORS__.push(entry);
+  __refreshErrorPanel();
+  return false; // don't suppress
+}
+
+window.onerror           = __captureError__;
+window.onunhandledrejection = function(e) {
+  __captureError__(
+    "Unhandled Promise: " + (e.reason?.message || String(e.reason)),
+    "", "", "", e.reason
+  );
+};
+
+// Intercept console.error too
+const _origError = console.error;
+console.error = function(...args) {
+  window.__ERRORS__.push({
+    type: "CONSOLE",
+    time: new Date().toLocaleTimeString("id-ID"),
+    msg: args.map(a => typeof a === "object" ? JSON.stringify(a) : String(a)).join(" "),
+    src:"", line:"", col:"", stack:""
+  });
+  __refreshErrorPanel();
+  _origError.apply(console, args);
+};
+
+// Also capture console.warn and log for completeness
+const _origWarn = console.warn;
+console.warn = function(...args) {
+  window.__LOGS__.push({
+    type:"WARN",
+    time:new Date().toLocaleTimeString("id-ID"),
+    msg: args.map(a=>typeof a==="object"?JSON.stringify(a):String(a)).join(" ")
+  });
+  _origWarn.apply(console, args);
+};
+
+function __refreshErrorPanel() {
+  const badge = document.getElementById("__err_badge__");
+  const panel = document.getElementById("__err_panel__");
+  if (badge) {
+    badge.textContent = window.__ERRORS__.length;
+    badge.style.display = window.__ERRORS__.length > 0 ? "flex" : "none";
+  }
+  if (panel && panel.style.display !== "none") {
+    __renderErrorPanel();
+  }
+}
+
+function __renderErrorPanel() {
+  const body = document.getElementById("__err_body__");
+  if (!body) return;
+  if (window.__ERRORS__.length === 0) {
+    body.innerHTML = '<div style="text-align:center;padding:24px;color:#6b7280">✅ Tidak ada error terdeteksi</div>';
+    return;
+  }
+  body.innerHTML = window.__ERRORS__.map((e, i) => {
+    const text = [
+      "[" + e.time + "] " + e.type,
+      "MSG:   " + e.msg,
+      e.src  ? "FILE:  " + e.src  + (e.line ? ":" + e.line : "") : "",
+      e.stack? "STACK: " + e.stack : ""
+    ].filter(Boolean).join("\n");
+    return '<div style="background:#1e293b;border:1px solid #334155;border-radius:8px;padding:12px;margin-bottom:8px;">'
+      + '<div style="font-family:monospace;font-size:11px;color:#e2e8f0;white-space:pre-wrap;word-break:break-all;line-height:1.5">'
+      + text.replace(/</g,"&lt;").replace(/>/g,"&gt;")
+      + '</div>'
+      + '<button onclick="__copyError__(' + i + ')" style="margin-top:8px;background:#3b82f6;color:#fff;border:none;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">📋 Copy error ini</button>'
+      + '</div>';
+  }).join("");
+}
+
+function __copyError__(i) {
+  const e = window.__ERRORS__[i];
+  const text = [
+    "=== SAWAH SENJA ERROR REPORT ===",
+    "Time:  " + e.time,
+    "Type:  " + e.type,
+    "MSG:   " + e.msg,
+    e.src   ? "FILE:  " + e.src + ":" + e.line + ":" + e.col : "",
+    e.stack ? "STACK: " + e.stack : "",
+    "UA: " + navigator.userAgent,
+  ].filter(Boolean).join("\n");
+
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(text).then(function() {
+      alert("Error disalin! Kirimkan teks ini ke developer.");
+    }).catch(function() { __fallbackCopy__(text); });
+  } else {
+    __fallbackCopy__(text);
+  }
+}
+window.__copyError__ = __copyError__;
+
+function __copyAllErrors__() {
+  if (!window.__ERRORS__.length) { alert("Tidak ada error."); return; }
+  const all = window.__ERRORS__.map(function(e, i) {
+    return "--- Error #" + (i+1) + " ---\n"
+      + "Time:  " + e.time + "\n"
+      + "Type:  " + e.type + "\n"
+      + "MSG:   " + e.msg + "\n"
+      + (e.src   ? "FILE:  " + e.src + ":" + e.line + "\n" : "")
+      + (e.stack ? "STACK: " + e.stack + "\n" : "");
+  }).join("\n");
+  const report = "=== SAWAH SENJA ERROR REPORT ===\n"
+    + "URL: " + window.location.href + "\n"
+    + "UA:  " + navigator.userAgent + "\n"
+    + "Time:" + new Date().toLocaleString("id-ID") + "\n\n"
+    + all;
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(report).then(function(){
+      alert("Semua error disalin! Kirimkan ke developer.");
+    }).catch(function(){ __fallbackCopy__(report); });
+  } else {
+    __fallbackCopy__(report);
+  }
+}
+window.__copyAllErrors__ = __copyAllErrors__;
+
+function __fallbackCopy__(text) {
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.cssText = "position:fixed;top:0;left:0;opacity:0;";
+  document.body.appendChild(ta);
+  ta.select(); ta.setSelectionRange(0,99999);
+  try { document.execCommand("copy"); alert("Error disalin! Kirimkan ke developer."); }
+  catch(e) { alert("Gagal copy otomatis. Teks error:\n\n" + text.slice(0,500)); }
+  document.body.removeChild(ta);
+}
+
+function __toggleErrorPanel__() {
+  const panel = document.getElementById("__err_panel__");
+  if (!panel) return;
+  const isHidden = panel.style.display === "none" || panel.style.display === "";
+  panel.style.display = isHidden ? "flex" : "none";
+  if (isHidden) __renderErrorPanel();
+}
+window.__toggleErrorPanel__ = __toggleErrorPanel__;
+</script>
 
 <script type="module">
 import { initializeApp }                       from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
@@ -56,9 +211,9 @@ let appSettings = {
   storeAddress:      "",
   storePhone:        "",
   receiptFooter:     "Terima kasih telah makan di Sawah Senja. Sampai jumpa lagi! 🌾",
-  // Template pesan WhatsApp - bisa diedit via Pengaturan
+  // Template pesan WhatsApp — bisa diedit via Pengaturan
   waTplReady: "Halo Kak *{nama}* 👋\n\nPesanan Kakak dengan nomor *#{orderId}* sudah *siap diambil!* 🌾\n\n*Pesanan:*\n{items}\n\nMohon segera menuju pickup counter kami ya, Kak.\nMetode pembayaran: *{metodeBayar}*\n\nTerima kasih sudah menunggu, Kak! 🙏\n_{toko}_",
-  waTplNota:  "Halo Kak *{nama}* 👋\n\nTerima kasih telah makan di *{toko}*. Kami sangat senang bisa melayani Kakak hari ini! 🌾\n\n✅ Pembayaran *LUNAS* - {metodeBayar}\n🧾 No. Order: *#{orderId}*\n💳 Total: *{total}*{cashDetail}\n\n📋 *Nota lengkap Kakak tersedia di sini:*\n{notaUrl}\n\nSemoga berkenan dan sampai jumpa lagi, Kak! 🙏\n_{receiptFooter}_",
+  waTplNota:  "Halo Kak *{nama}* 👋\n\nTerima kasih telah makan di *{toko}*. Kami sangat senang bisa melayani Kakak hari ini! 🌾\n\n✅ Pembayaran *LUNAS* — {metodeBayar}\n🧾 No. Order: *#{orderId}*\n💳 Total: *{total}*{cashDetail}\n\n📋 *Nota lengkap Kakak tersedia di sini:*\n{notaUrl}\n\nSemoga berkenan dan sampai jumpa lagi, Kak! 🙏\n_{receiptFooter}_",
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -75,7 +230,7 @@ const STATUS_LABEL = {NEW:"Baru",COOKING:"Masak",READY:"Siap",DONE:"Selesai"};
 
 // FIX B2/B3: compute fee from order data, not from live appSettings
 function calcOrderFee(order) {
-  // Fee sudah tersimpan di order saat checkout - gunakan itu
+  // Fee sudah tersimpan di order saat checkout — gunakan itu
   return order.serviceFee || 0;
 }
 
@@ -253,7 +408,7 @@ function startSettingsListener() {
         storePhone:        d.storePhone        ||"",
         receiptFooter:     d.receiptFooter     ||"Terima kasih telah makan di Sawah Senja. Sampai jumpa lagi! 🌾",
         waTplReady: d.waTplReady || "Halo Kak *{nama}* 👋\n\nPesanan Kakak dengan nomor *#{orderId}* sudah *siap diambil!* 🌾\n\n*Pesanan:*\n{items}\n\nMohon segera menuju pickup counter kami ya, Kak.\nMetode pembayaran: *{metodeBayar}*\n\nTerima kasih sudah menunggu, Kak! 🙏\n_{toko}_",
-        waTplNota:  d.waTplNota  || "Halo Kak *{nama}* 👋\n\nTerima kasih telah makan di *{toko}*. Kami sangat senang bisa melayani Kakak hari ini! 🌾\n\n✅ Pembayaran *LUNAS* - {metodeBayar}\n🧾 No. Order: *#{orderId}*\n💳 Total: *{total}*{cashDetail}\n\n📋 *Nota lengkap Kakak tersedia di sini:*\n{notaUrl}\n\nSemoga berkenan dan sampai jumpa lagi, Kak! 🙏\n_{receiptFooter}_",
+        waTplNota:  d.waTplNota  || "Halo Kak *{nama}* 👋\n\nTerima kasih telah makan di *{toko}*. Kami sangat senang bisa melayani Kakak hari ini! 🌾\n\n✅ Pembayaran *LUNAS* — {metodeBayar}\n🧾 No. Order: *#{orderId}*\n💳 Total: *{total}*{cashDetail}\n\n📋 *Nota lengkap Kakak tersedia di sini:*\n{notaUrl}\n\nSemoga berkenan dan sampai jumpa lagi, Kak! 🙏\n_{receiptFooter}_",
       };
     }
     if(activeTab==="settings") renderSettingsPanel();
@@ -323,7 +478,7 @@ async function deleteAllDone() {
 window.deleteAllDone=deleteAllDone;
 
 // ─────────────────────────────────────────────────────────────
-// KOT - Kitchen Order Ticket (cetak ke printer thermal dapur)
+// KOT — Kitchen Order Ticket (cetak ke printer thermal dapur)
 // ─────────────────────────────────────────────────────────────
 function printKOT(order) {
   const now  = new Date();
@@ -333,7 +488,7 @@ function printKOT(order) {
   const SEPD = "\u2550".repeat(32);
   const store= appSettings.storeName || "Sawah Senja";
 
-  // Pre-build item HTML - no nested template literals
+  // Pre-build item HTML — no nested template literals
   const itemsHtml = (order.items||[]).map(function(i) {
     var noteHtml = i.notes
       ? '<div class="note">&#x21B3; ' + i.notes + '</div>'
@@ -344,7 +499,7 @@ function printKOT(order) {
          + '</div>';
   }).join('');
 
-  // Build KOT HTML using string concatenation - safe from backtick conflicts
+  // Build KOT HTML using string concatenation — safe from backtick conflicts
   var kotHtml = '<!DOCTYPE html><html><head><meta charset="UTF-8"/>'
     + '<style>'
     + '@page{width:58mm;margin:2mm 3mm;}'
@@ -374,7 +529,76 @@ function printKOT(order) {
     + '<div class="sep">' + SEP + '</div>'
     + '<div class="footer">*** SEGERA DIPROSES ***</div>'
     + '<div style="height:8mm"></div>'
-    + '</body></html>';
+    + '
+<!-- ════ ERROR CONSOLE (debug tool) ════ -->
+<!-- Tombol mengambang di pojok kiri bawah -->
+<button onclick="__toggleErrorPanel__()"
+  style="position:fixed;bottom:16px;left:16px;z-index:99999;
+         width:44px;height:44px;border-radius:50%;border:none;cursor:pointer;
+         background:#dc2626;color:#fff;font-size:16px;
+         display:flex;align-items:center;justify-content:center;
+         box-shadow:0 4px 14px rgba(220,38,38,0.4);
+         font-family:monospace;"
+  title="Lihat Error Console">
+  🐛
+  <span id="__err_badge__"
+    style="display:none;position:absolute;top:-4px;right:-4px;
+           background:#fbbf24;color:#000;font-size:10px;font-weight:900;
+           width:18px;height:18px;border-radius:50%;
+           align-items:center;justify-content:center;">0</span>
+</button>
+
+<!-- Error Panel -->
+<div id="__err_panel__"
+  style="display:none;position:fixed;inset:0;z-index:99998;
+         background:rgba(0,0,0,0.85);flex-direction:column;">
+  <!-- Header -->
+  <div style="background:#0f172a;border-bottom:1px solid #334155;
+              padding:14px 16px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">
+    <div style="color:#f1f5f9;font-weight:800;font-size:15px;font-family:monospace;">
+      🐛 Error Console
+      <span id="__err_count_label__" style="font-size:12px;color:#94a3b8;font-weight:400;margin-left:8px;"></span>
+    </div>
+    <div style="display:flex;gap:8px;">
+      <button onclick="__copyAllErrors__()"
+        style="background:#3b82f6;color:#fff;border:none;border-radius:8px;
+               padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;">
+        📋 Copy Semua
+      </button>
+      <button onclick="window.__ERRORS__=[];__renderErrorPanel();__refreshErrorPanel();"
+        style="background:#475569;color:#fff;border:none;border-radius:8px;
+               padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;">
+        🗑 Clear
+      </button>
+      <button onclick="__toggleErrorPanel__()"
+        style="background:#1e293b;color:#94a3b8;border:1px solid #334155;border-radius:8px;
+               padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;">
+        ✕ Tutup
+      </button>
+    </div>
+  </div>
+  <!-- Info bar -->
+  <div style="background:#1e293b;padding:8px 16px;font-family:monospace;font-size:10px;color:#64748b;flex-shrink:0;">
+    URL: <span id="__err_url__"></span>
+  </div>
+  <!-- Body -->
+  <div id="__err_body__"
+    style="flex:1;overflow-y:auto;padding:16px;
+           font-family:monospace;background:#0f172a;">
+    <div style="text-align:center;padding:24px;color:#6b7280">Memuat…</div>
+  </div>
+</div>
+
+<script>
+// Set URL info when DOM ready
+document.addEventListener("DOMContentLoaded", function() {
+  const urlEl = document.getElementById("__err_url__");
+  if (urlEl) urlEl.textContent = window.location.href;
+  // Show badge if errors already captured during load
+  __refreshErrorPanel();
+});
+</script>
+</body></html>';
 
   // Buka popup print
   var win = window.open("", "_blank", "width=300,height=500");
@@ -387,7 +611,7 @@ function printKOT(order) {
 window.printKOT = printKOT;
 
 // ─────────────────────────────────────────────────────────────
-// WA - READY NOTIFICATION (bukan nota)
+// WA — READY NOTIFICATION (bukan nota)
 // ─────────────────────────────────────────────────────────────
 // ── Template interpolation engine ──────────────────────────
 // Variabel yang tersedia: {nama} {orderId} {items} {metodeBayar} {toko}
@@ -427,7 +651,7 @@ function sendReadyWA(order) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// POS - Proses Pembayaran + Kirim Nota
+// POS — Proses Pembayaran + Kirim Nota
 // ─────────────────────────────────────────────────────────────
 function openPOS(order) {
   posOrder   = order;
@@ -478,7 +702,7 @@ function openPOS(order) {
   if(changeEl) changeEl.textContent = "Rp 0";
   changeEl?.classList.remove("pos-cash-change--ready");
 
-  // Payment method pre-select - THEN show/hide cash section based on method
+  // Payment method pre-select — THEN show/hide cash section based on method
   const pmSel=document.getElementById("pos-payment-method");
   if(pmSel) {
     pmSel.value = order.paymentMethod || "Cash";
@@ -582,7 +806,7 @@ async function confirmPOS() {
       notaUrl
     );
 
-    showToast("Pembayaran dikonfirmasi - Nota dikirim via WA!","success");
+    showToast("Pembayaran dikonfirmasi — Nota dikirim via WA!","success");
     closePOS();
   } catch(e){
     console.error(e);
@@ -602,7 +826,7 @@ function getNotaUrl(firestoreDocId) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// WA - NOTA LINK (singkat + profesional)
+// WA — NOTA LINK (singkat + profesional)
 // ─────────────────────────────────────────────────────────────
 function sendNotaLinkWA(order, notaUrl) {
   const phone   = String(order.customerWhatsapp).replace(/\D/g,"");
@@ -612,7 +836,7 @@ function sendNotaLinkWA(order, notaUrl) {
     : "";
 
   const tpl = appSettings.waTplNota ||
-    "Halo Kak *{nama}* 👋\n\nTerima kasih telah makan di *{toko}*! 🌾\n\n✅ Pembayaran *LUNAS* - {metodeBayar}\n🧾 No. Order: *#{orderId}*\n💳 Total: *{total}*{cashDetail}\n\n📋 *Nota:*\n{notaUrl}\n\n_{receiptFooter}_";
+    "Halo Kak *{nama}* 👋\n\nTerima kasih telah makan di *{toko}*! 🌾\n\n✅ Pembayaran *LUNAS* — {metodeBayar}\n🧾 No. Order: *#{orderId}*\n💳 Total: *{total}*{cashDetail}\n\n📋 *Nota:*\n{notaUrl}\n\n_{receiptFooter}_";
 
   const text = interpolateWA(tpl, {
     nama:          order.customerName || "",
@@ -683,7 +907,7 @@ function renderHeaderStats() {
   set("hdr-active-num", a.active+" aktif");
 }
 
-// FIX B1: renderFilterBadges - no more innerHTML regex replace
+// FIX B1: renderFilterBadges — no more innerHTML regex replace
 function renderFilterBadges() {
   ["ALL","NEW","COOKING","READY","DONE"].forEach(s=>{
     const el=document.getElementById("badge-"+s);
@@ -746,7 +970,7 @@ function buildCard(o) {
   if(o.orderStatus==="NEW")
     actionBtn=`<button data-action="start-cooking" data-id="${o.id}" class="act-btn act-btn--amber">▶ Mulai Masak</button>`;
 
-  // Tombol print KOT - tampil di NEW dan COOKING
+  // Tombol print KOT — tampil di NEW dan COOKING
   const kotBtn = (o.orderStatus==="NEW"||o.orderStatus==="COOKING")
     ? `<button data-action="print-kot" data-id="${o.id}"
          class="act-btn act-btn--kot" title="Print Kitchen Order Ticket ke printer thermal">
@@ -764,7 +988,7 @@ function buildCard(o) {
       Proses Bayar
     </button>`;
 
-  // WA button - only for READY (notification), DONE has receipt button
+  // WA button — only for READY (notification), DONE has receipt button
   const waBtn = o.orderStatus==="READY"
     ? `<button data-action="send-wa" data-id="${o.id}" class="act-btn act-btn--wa${o.whatsappSent?" opacity-60":""}">
         <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/><path d="M12 0C5.373 0 0 5.373 0 12c0 2.127.558 4.126 1.533 5.858L0 24l6.335-1.502A11.955 11.955 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 22c-1.853 0-3.585-.5-5.082-1.373l-.362-.217-3.761.892.952-3.669-.239-.381A9.955 9.955 0 012 12C2 6.477 6.477 2 12 2s10 4.477 10 10-4.477 10-10 10z"/></svg>
@@ -952,14 +1176,14 @@ function renderSettingsPanel() {
       </div>
       <div id="promo-preview" class="mt-3 rounded-xl px-4 py-3 flex items-center gap-3 ${s.promoEnabled?"":"opacity-40"}" style="background:linear-gradient(90deg,#16a34a,#22c55e);">
         <span class="text-xl">🎁</span>
-        <span class="text-white text-sm font-semibold" id="promo-preview-text">${s.promoText||"-"}</span>
+        <span class="text-white text-sm font-semibold" id="promo-preview-text">${s.promoText||"—"}</span>
       </div>
     </div>
 
     <!-- Service Fee -->
     <div class="settings-card sm:col-span-2">
       <div class="settings-card__title">💰 Biaya Tambahan</div>
-      <div class="settings-card__desc">Service fee atau PPN - bisa nominal tetap atau persentase dari subtotal.</div>
+      <div class="settings-card__desc">Service fee atau PPN — bisa nominal tetap atau persentase dari subtotal.</div>
       <div class="sf-field sf-field--row mt-4">
         <label class="sf-label">Aktifkan</label>
         <label class="toggle-switch"><input type="checkbox" id="sf-fee-enabled" ${s.serviceFeeEnabled?"checked":""} onchange="onFeeToggle()"/><span class="toggle-track"></span></label>
@@ -1077,7 +1301,7 @@ function renderSettingsPanel() {
   };
   window.updatePromoPreview=()=>{
     const el=document.getElementById("promo-preview-text");
-    if(el) el.textContent=document.getElementById("sf-promo-text")?.value||"-";
+    if(el) el.textContent=document.getElementById("sf-promo-text")?.value||"—";
   };
   window.togglePromoPreview=()=>{
     const en=document.getElementById("sf-promo-enabled")?.checked;
@@ -1123,7 +1347,7 @@ function renderSettingsPanel() {
   // ── WA Template helpers ──────────────────────────────────
   const WA_DEFAULTS = {
     ready: "Halo Kak *{nama}* 👋\n\nPesanan Kakak dengan nomor *#{orderId}* sudah *siap diambil!* 🌾\n\n*Pesanan:*\n{items}\n\nMohon segera menuju pickup counter kami ya, Kak.\nMetode pembayaran: *{metodeBayar}*\n\nTerima kasih sudah menunggu, Kak! 🙏\n_{toko}_",
-    nota:  "Halo Kak *{nama}* 👋\n\nTerima kasih telah makan di *{toko}*. Kami sangat senang bisa melayani Kakak hari ini! 🌾\n\n✅ Pembayaran *LUNAS* - {metodeBayar}\n🧾 No. Order: *#{orderId}*\n💳 Total: *{total}*{cashDetail}\n\n📋 *Nota lengkap Kakak tersedia di sini:*\n{notaUrl}\n\nSemoga berkenan dan sampai jumpa lagi, Kak! 🙏\n_{receiptFooter}_",
+    nota:  "Halo Kak *{nama}* 👋\n\nTerima kasih telah makan di *{toko}*. Kami sangat senang bisa melayani Kakak hari ini! 🌾\n\n✅ Pembayaran *LUNAS* — {metodeBayar}\n🧾 No. Order: *#{orderId}*\n💳 Total: *{total}*{cashDetail}\n\n📋 *Nota lengkap Kakak tersedia di sini:*\n{notaUrl}\n\nSemoga berkenan dan sampai jumpa lagi, Kak! 🙏\n_{receiptFooter}_",
   };
 
   window.resetWaTpl = (type) => {
@@ -1256,7 +1480,7 @@ function closeMenuModal() {
 
 
 // ═════════════════════════════════════════════════════════════
-// LAPORAN - Report Engine
+// LAPORAN — Report Engine
 // ═════════════════════════════════════════════════════════════
 
 let reportOrders    = [];   // orders loaded for selected date range
@@ -1339,13 +1563,13 @@ function buildReportData() {
   });
   const topItems = Object.values(itemMap).sort((a,b)=>b.qty-a.qty).slice(0,10);
 
-  // FIX: Revenue by hour - only from paid orders
+  // FIX: Revenue by hour — only from paid orders
   const byHour = Array(24).fill(0);
   paid.forEach(o=>{
     const d = o.createdAt?.toDate?.() || new Date();
     byHour[d.getHours()] += o.total||0;
   });
-  // FIX: peakHour - only meaningful if there's any revenue
+  // FIX: peakHour — only meaningful if there's any revenue
   const maxHourVal = Math.max(...byHour);
   const peakHour   = maxHourVal > 0 ? byHour.indexOf(maxHourVal) : -1;
 
@@ -1363,7 +1587,7 @@ function buildReportData() {
     .map(([cat,v])=>({cat, revenue:v.revenue, qty:v.qty}))
     .sort((a,b)=>b.revenue-a.revenue);
 
-  // FIX: Daily breakdown - all orders counted, revenue only from paid
+  // FIX: Daily breakdown — all orders counted, revenue only from paid
   const dailyMap = {};
   // Init all orders (for count)
   orders.forEach(o=>{
@@ -1427,7 +1651,7 @@ function renderReportPanel() {
   // ── Header info for print ──
   const periodLabel = d.dateFrom===d.dateTo
     ? fmtDateStr(d.dateFrom)
-    : `${fmtDateStr(d.dateFrom)} - ${fmtDateStr(d.dateTo)}`;
+    : `${fmtDateStr(d.dateFrom)} – ${fmtDateStr(d.dateTo)}`;
 
   panel.innerHTML = `
   <div id="report-content">
@@ -1476,7 +1700,7 @@ function renderReportPanel() {
       <div class="rpt-kpi rpt-kpi--slate">
         <div class="rpt-kpi__icon">⏰</div>
         <div class="rpt-kpi__label">Jam Tersibuk</div>
-        <div class="rpt-kpi__value">${d.peakHour>=0?d.peakHour.toString().padStart(2,"0")+":00":"-"}</div>
+        <div class="rpt-kpi__value">${d.peakHour>=0?d.peakHour.toString().padStart(2,"0")+":00":"—"}</div>
         <div class="rpt-kpi__sub">${d.peakHour>=0?"Puncak penjualan":"Belum ada data"}</div>
       </div>
     </div>
@@ -1632,7 +1856,7 @@ function renderReportPanel() {
             </div>`;
           }).join("")}
         </div>
-        ${d.peakHour>=0?`<div class="rpt-hour-note">Puncak penjualan: <strong>${d.peakHour.toString().padStart(2,"0")}:00</strong> - ${fmt(d.byHour[d.peakHour])}</div>`:""}
+        ${d.peakHour>=0?`<div class="rpt-hour-note">Puncak penjualan: <strong>${d.peakHour.toString().padStart(2,"0")}:00</strong> — ${fmt(d.byHour[d.peakHour])}</div>`:""}
       </div>
     </div>
 
@@ -1689,13 +1913,13 @@ function exportExcel() {
   const d     = buildReportData();
   const wb    = XLSX.utils.book_new();
   const store = appSettings.storeName||"Sawah Senja";
-  const period= d.dateFrom===d.dateTo ? fmtDateStr(d.dateFrom) : `${fmtDateStr(d.dateFrom)} - ${fmtDateStr(d.dateTo)}`;
+  const period= d.dateFrom===d.dateTo ? fmtDateStr(d.dateFrom) : `${fmtDateStr(d.dateFrom)} – ${fmtDateStr(d.dateTo)}`;
   const dicetak = new Date().toLocaleString("id-ID");
 
   // ── Sheet 1: Ringkasan ──
   const feeLabel = appSettings.serviceFeeLabel||"Service Fee";
   const ws1data = [
-    [`LAPORAN PENJUALAN - ${store}`],
+    [`LAPORAN PENJUALAN — ${store}`],
     [`Periode: ${period}`],
     [`Dicetak: ${dicetak}`],
     [],
@@ -1709,7 +1933,7 @@ function exportExcel() {
     [feeLabel+" Terkumpul",      d.feesCollected,      ""],
     ["Rata-rata / Order",        d.avgOrderValue,      ""],
     ["Total Item Terjual",       d.totalItems,         ""],
-    ["Jam Tersibuk",             d.peakHour>=0?`${d.peakHour.toString().padStart(2,"0")}:00`:"-",""],
+    ["Jam Tersibuk",             d.peakHour>=0?`${d.peakHour.toString().padStart(2,"0")}:00`:"—",""],
     [],
     ["METODE PEMBAYARAN","",""],
     ["Metode","Jumlah","% dari Transaksi Lunas"],
@@ -1887,7 +2111,7 @@ window.printReport = printReport;
 // ── Quick date shortcuts ──────────────────────────────────────
 function setReportRange(preset) {
   const today  = new Date();
-  const isoDay = d => d.toISOString().slice(0,10);  // renamed - tidak shadow fmt()
+  const isoDay = d => d.toISOString().slice(0,10);  // renamed — tidak shadow fmt()
   let from, to = isoDay(today);
 
   if(preset==="today")    { from=to; }
@@ -2109,7 +2333,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);}
 .act-btn--slate{background:var(--bg);color:var(--text2);border:1.5px solid var(--border2);}.act-btn--slate:hover{background:var(--border);}
 .act-btn--wa{background:#dcfce7;color:#15803d;border:1.5px solid #86efac;}.act-btn--wa:hover{background:#bbf7d0;}
 .act-btn--delete{background:#f8fafc;color:#94a3b8;border:1.5px solid var(--border);}.act-btn--delete:hover{background:#fee2e2;color:#dc2626;border-color:#fca5a5;}
-/* POS button - prominent */
+/* POS button — prominent */
 .act-btn--pos{background:linear-gradient(135deg,var(--orange),var(--orange2));color:#fff;border:none;box-shadow:0 2px 8px rgba(234,88,12,.3);}.act-btn--pos:hover{opacity:.9;box-shadow:0 4px 12px rgba(234,88,12,.4);}
 /* KOT print button */
 .act-btn--kot{background:#faf5ff;color:#6d28d9;border:1.5px solid #c4b5fd;}.act-btn--kot:hover{background:#ede9fe;}
@@ -2456,7 +2680,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);}
       <div id="login-error" style="display:none" class="text-sm text-red-600 bg-red-50 border border-red-200 rounded-xl px-4 py-3"></div>
       <button id="btn-login" class="login-btn mt-1">Masuk</button>
     </div>
-    <div class="text-center mt-5 text-xs text-slate-400">Akses terbatas - staff & admin saja</div>
+    <div class="text-center mt-5 text-xs text-slate-400">Akses terbatas — staff & admin saja</div>
   </div>
 </div>
 
@@ -2578,7 +2802,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);}
             <label class="rpt-date-label">Dari</label>
             <input type="date" id="rpt-from" class="rpt-date-input"/>
           </div>
-          <span class="text-slate-400 text-sm font-medium">-</span>
+          <span class="text-slate-400 text-sm font-medium">—</span>
           <div class="rpt-date-group">
             <label class="rpt-date-label">Sampai</label>
             <input type="date" id="rpt-to" class="rpt-date-input"/>
@@ -2624,7 +2848,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);}
 
     <!-- SETTINGS SECTION -->
     <div id="settings-section" style="display:none">
-      <div class="mb-4"><div class="font-bold text-slate-900 text-base">Pengaturan Toko</div><div class="text-slate-400 text-sm mt-0.5">Identitas toko, promo, dan biaya - langsung tampil di customer & nota.</div></div>
+      <div class="mb-4"><div class="font-bold text-slate-900 text-base">Pengaturan Toko</div><div class="text-slate-400 text-sm mt-0.5">Identitas toko, promo, dan biaya — langsung tampil di customer & nota.</div></div>
       <div id="settings-panel"><div class="skeleton h-48 rounded-2xl"></div></div>
     </div>
 
@@ -2690,13 +2914,13 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);}
           <span id="pos-payment-status" class="pos-pay-status pos-pay-unpaid">UNPAID</span>
         </div>
         <select id="pos-payment-method" class="pos-select" onchange="onPosPaymentChange()">
-          <option value="Cash">💵 Cash - Bayar Tunai</option>
-          <option value="QRIS">📱 QRIS - Scan QR</option>
+          <option value="Cash">💵 Cash — Bayar Tunai</option>
+          <option value="QRIS">📱 QRIS — Scan QR</option>
           <option value="Transfer">🏦 Transfer Bank</option>
           <option value="Debit">💳 Kartu Debit</option>
         </select>
 
-        <!-- Cash input - hanya muncul jika Cash dipilih -->
+        <!-- Cash input — hanya muncul jika Cash dipilih -->
         <div id="pos-cash-section" class="pos-cash-section" style="display:none">
           <div class="pos-cash-row">
             <label class="pos-cash-label">Uang Diterima (Rp)</label>
@@ -2772,5 +2996,74 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);}
   </div>
 </div>
 
+
+<!-- ════ ERROR CONSOLE (debug tool) ════ -->
+<!-- Tombol mengambang di pojok kiri bawah -->
+<button onclick="__toggleErrorPanel__()"
+  style="position:fixed;bottom:16px;left:16px;z-index:99999;
+         width:44px;height:44px;border-radius:50%;border:none;cursor:pointer;
+         background:#dc2626;color:#fff;font-size:16px;
+         display:flex;align-items:center;justify-content:center;
+         box-shadow:0 4px 14px rgba(220,38,38,0.4);
+         font-family:monospace;"
+  title="Lihat Error Console">
+  🐛
+  <span id="__err_badge__"
+    style="display:none;position:absolute;top:-4px;right:-4px;
+           background:#fbbf24;color:#000;font-size:10px;font-weight:900;
+           width:18px;height:18px;border-radius:50%;
+           align-items:center;justify-content:center;">0</span>
+</button>
+
+<!-- Error Panel -->
+<div id="__err_panel__"
+  style="display:none;position:fixed;inset:0;z-index:99998;
+         background:rgba(0,0,0,0.85);flex-direction:column;">
+  <!-- Header -->
+  <div style="background:#0f172a;border-bottom:1px solid #334155;
+              padding:14px 16px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">
+    <div style="color:#f1f5f9;font-weight:800;font-size:15px;font-family:monospace;">
+      🐛 Error Console
+      <span id="__err_count_label__" style="font-size:12px;color:#94a3b8;font-weight:400;margin-left:8px;"></span>
+    </div>
+    <div style="display:flex;gap:8px;">
+      <button onclick="__copyAllErrors__()"
+        style="background:#3b82f6;color:#fff;border:none;border-radius:8px;
+               padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;">
+        📋 Copy Semua
+      </button>
+      <button onclick="window.__ERRORS__=[];__renderErrorPanel();__refreshErrorPanel();"
+        style="background:#475569;color:#fff;border:none;border-radius:8px;
+               padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;">
+        🗑 Clear
+      </button>
+      <button onclick="__toggleErrorPanel__()"
+        style="background:#1e293b;color:#94a3b8;border:1px solid #334155;border-radius:8px;
+               padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;">
+        ✕ Tutup
+      </button>
+    </div>
+  </div>
+  <!-- Info bar -->
+  <div style="background:#1e293b;padding:8px 16px;font-family:monospace;font-size:10px;color:#64748b;flex-shrink:0;">
+    URL: <span id="__err_url__"></span>
+  </div>
+  <!-- Body -->
+  <div id="__err_body__"
+    style="flex:1;overflow-y:auto;padding:16px;
+           font-family:monospace;background:#0f172a;">
+    <div style="text-align:center;padding:24px;color:#6b7280">Memuat…</div>
+  </div>
+</div>
+
+<script>
+// Set URL info when DOM ready
+document.addEventListener("DOMContentLoaded", function() {
+  const urlEl = document.getElementById("__err_url__");
+  if (urlEl) urlEl.textContent = window.location.href;
+  // Show badge if errors already captured during load
+  __refreshErrorPanel();
+});
+</script>
 </body>
 </html>
