@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
 <title>Sawah Senja - Dashboard</title>
 <script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet"/>
 
 <script type="module">
@@ -1048,12 +1049,666 @@ function closeMenuModal() {
   menuEditTarget=null; menuModalOpen=false;
 }
 
+
+// ═════════════════════════════════════════════════════════════
+// LAPORAN - Report Engine
+// ═════════════════════════════════════════════════════════════
+
+let reportOrders    = [];   // orders loaded for selected date range
+let reportLoading   = false;
+let reportDateFrom  = "";
+let reportDateTo    = "";
+
+// ── Date helpers ──────────────────────────────────────────────
+function todayStr()      { return new Date().toISOString().slice(0,10); }
+function fmtDateStr(str) { if(!str) return "-"; const d=new Date(str+"T00:00:00"); return d.toLocaleDateString("id-ID",{day:"2-digit",month:"long",year:"numeric"}); }
+function fmtDtFull(ts)   { if(!ts) return "-"; const d=ts.toDate?ts.toDate():new Date(ts); return d.toLocaleDateString("id-ID",{day:"2-digit",month:"2-digit",year:"numeric"})+" "+d.toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"}); }
+
+// ── Load orders for date range ────────────────────────────────
+async function loadReportOrders() {
+  const fromEl = document.getElementById("rpt-from");
+  const toEl   = document.getElementById("rpt-to");
+  if(!fromEl||!toEl) return;
+
+  reportDateFrom = fromEl.value || todayStr();
+  reportDateTo   = toEl.value   || todayStr();
+
+  const fromDate = new Date(reportDateFrom+"T00:00:00");
+  const toDate   = new Date(reportDateTo  +"T23:59:59");
+
+  if(fromDate > toDate){ showToast("Tanggal awal harus sebelum tanggal akhir","error"); return; }
+
+  reportLoading = true;
+  renderReportPanel();
+
+  try {
+    const snap = await getDocs(query(
+      collection(db,"orders"),
+      where("createdAt",">=", Timestamp.fromDate(fromDate)),
+      where("createdAt","<=", Timestamp.fromDate(toDate)),
+      orderBy("createdAt","asc")
+    ));
+    reportOrders = snap.docs.map(d=>({id:d.id,...d.data()}));
+    reportLoading = false;
+    renderReportPanel();
+  } catch(e) {
+    console.error(e);
+    reportLoading = false;
+    showToast("Gagal load data: "+e.message,"error");
+    renderReportPanel();
+  }
+}
+window.loadReportOrders = loadReportOrders;
+
+// ── Analytics engine ──────────────────────────────────────────
+function buildReportData() {
+  const orders = reportOrders;
+  const paid   = orders.filter(o=>o.paymentStatus==="PAID");
+  const total  = orders.length;
+
+  const grossRevenue   = paid.reduce((s,o)=>s+(o.total||0),0);
+  const netRevenue     = paid.reduce((s,o)=>s+(o.subtotal||o.total||0),0);
+  const feesCollected  = paid.reduce((s,o)=>s+(o.serviceFee||0),0);
+  const avgOrderValue  = paid.length ? Math.round(grossRevenue/paid.length) : 0;
+  const totalItems     = orders.reduce((s,o)=>s+(o.items||[]).reduce((a,i)=>a+(i.qty||0),0),0);
+
+  // Orders by status
+  const byStatus = {NEW:0,COOKING:0,READY:0,DONE:0};
+  orders.forEach(o=>{ if(byStatus[o.orderStatus]!==undefined) byStatus[o.orderStatus]++; });
+
+  // Orders by payment method
+  const byPayment = {};
+  paid.forEach(o=>{
+    const pm = o.paymentMethod||"Lainnya";
+    byPayment[pm] = (byPayment[pm]||0)+1;
+  });
+
+  // Top items
+  const itemMap = {};
+  orders.forEach(o=>{
+    (o.items||[]).forEach(i=>{
+      if(!itemMap[i.name]) itemMap[i.name]={name:i.name,qty:0,revenue:0};
+      itemMap[i.name].qty     += i.qty||0;
+      itemMap[i.name].revenue += (i.price||0)*(i.qty||0);
+    });
+  });
+  const topItems = Object.values(itemMap).sort((a,b)=>b.qty-a.qty).slice(0,10);
+
+  // FIX: Revenue by hour - only from paid orders
+  const byHour = Array(24).fill(0);
+  paid.forEach(o=>{
+    const d = o.createdAt?.toDate?.() || new Date();
+    byHour[d.getHours()] += o.total||0;
+  });
+  // FIX: peakHour - only meaningful if there's any revenue
+  const maxHourVal = Math.max(...byHour);
+  const peakHour   = maxHourVal > 0 ? byHour.indexOf(maxHourVal) : -1;
+
+  // Revenue by category (from all orders, not just paid)
+  const byCat = {};
+  orders.forEach(o=>{
+    (o.items||[]).forEach(i=>{
+      const cat = i.category || "Lainnya";
+      if(!byCat[cat]) byCat[cat]={revenue:0, qty:0};
+      byCat[cat].revenue += (i.price||0)*(i.qty||0);
+      byCat[cat].qty     += (i.qty||0);
+    });
+  });
+  const byCatArr = Object.entries(byCat)
+    .map(([cat,v])=>({cat, revenue:v.revenue, qty:v.qty}))
+    .sort((a,b)=>b.revenue-a.revenue);
+
+  // FIX: Daily breakdown - all orders counted, revenue only from paid
+  const dailyMap = {};
+  // Init all orders (for count)
+  orders.forEach(o=>{
+    const d   = o.createdAt?.toDate?.() || new Date();
+    const key = d.toISOString().slice(0,10);
+    if(!dailyMap[key]) dailyMap[key]={date:key, allOrders:0, paidOrders:0, revenue:0};
+    dailyMap[key].allOrders++;
+    if(o.paymentStatus==="PAID"){
+      dailyMap[key].paidOrders++;
+      dailyMap[key].revenue += o.total||0;
+    }
+  });
+  const daily = Object.values(dailyMap).sort((a,b)=>a.date.localeCompare(b.date));
+
+  return {
+    orders, paid, total,
+    grossRevenue, netRevenue, feesCollected, avgOrderValue, totalItems,
+    byStatus, byPayment, topItems, byHour, peakHour, byCat, byCatArr, daily,
+    dateFrom:reportDateFrom, dateTo:reportDateTo,
+  };
+}
+
+// ── Render report panel ────────────────────────────────────────
+function renderReportPanel() {
+  const panel = document.getElementById("report-panel");
+  if(!panel) return;
+
+  if(reportLoading) {
+    panel.innerHTML=`
+      <div class="flex flex-col items-center justify-center py-20 gap-3">
+        <div class="w-8 h-8 border-3 border-slate-200 border-t-orange-500 rounded-full animate-spin" style="border-width:3px;animation:spin 0.8s linear infinite;"></div>
+        <div class="text-sm text-slate-400 font-medium">Memuat data laporan…</div>
+      </div>`;
+    return;
+  }
+
+  if(!reportOrders.length && reportDateFrom) {
+    panel.innerHTML=`
+      <div class="flex flex-col items-center justify-center py-20 gap-3 text-center">
+        <div class="text-4xl">📭</div>
+        <div class="font-bold text-slate-500">Tidak ada data</div>
+        <div class="text-sm text-slate-400">Tidak ada order di rentang tanggal ini.</div>
+      </div>`;
+    return;
+  }
+
+  if(!reportDateFrom) {
+    panel.innerHTML=`
+      <div class="flex flex-col items-center justify-center py-20 gap-3 text-center">
+        <div class="text-4xl">📊</div>
+        <div class="font-bold text-slate-500">Pilih tanggal</div>
+        <div class="text-sm text-slate-400">Pilih rentang tanggal lalu klik "Tampilkan Laporan".</div>
+      </div>`;
+    return;
+  }
+
+  const d = buildReportData();
+  const isMultiDay = d.dateFrom !== d.dateTo;
+  const storeName  = appSettings.storeName || "Sawah Senja";
+
+  // ── Header info for print ──
+  const periodLabel = d.dateFrom===d.dateTo
+    ? fmtDateStr(d.dateFrom)
+    : `${fmtDateStr(d.dateFrom)} - ${fmtDateStr(d.dateTo)}`;
+
+  panel.innerHTML = `
+  <div id="report-content">
+
+    <!-- Print header (hidden on screen) -->
+    <div class="rpt-print-header">
+      <div class="rpt-print-store">${appSettings.storeName||"Sawah Senja"}</div>
+      <div class="rpt-print-title">LAPORAN PENJUALAN</div>
+      <div class="rpt-print-period">Periode: ${periodLabel}</div>
+      <div class="rpt-print-date">Dicetak: ${new Date().toLocaleString("id-ID")}</div>
+    </div>
+
+    <!-- ── KPI Summary Cards ── -->
+    <div class="rpt-kpi-grid">
+      <div class="rpt-kpi rpt-kpi--green">
+        <div class="rpt-kpi__icon">💰</div>
+        <div class="rpt-kpi__label">Total Revenue</div>
+        <div class="rpt-kpi__value">${fmt(d.grossRevenue)}</div>
+        <div class="rpt-kpi__sub">${d.paid.length} transaksi lunas</div>
+      </div>
+      <div class="rpt-kpi rpt-kpi--blue">
+        <div class="rpt-kpi__icon">📦</div>
+        <div class="rpt-kpi__label">Total Order</div>
+        <div class="rpt-kpi__value">${d.total}</div>
+        <div class="rpt-kpi__sub">${d.paid.length} lunas · ${d.total-d.paid.length} lainnya</div>
+      </div>
+      <div class="rpt-kpi rpt-kpi--amber">
+        <div class="rpt-kpi__icon">📊</div>
+        <div class="rpt-kpi__label">Rata-rata / Order</div>
+        <div class="rpt-kpi__value">${fmt(d.avgOrderValue)}</div>
+        <div class="rpt-kpi__sub">Per transaksi lunas</div>
+      </div>
+      <div class="rpt-kpi rpt-kpi--teal">
+        <div class="rpt-kpi__icon">🛍️</div>
+        <div class="rpt-kpi__label">Item Terjual</div>
+        <div class="rpt-kpi__value">${d.totalItems}</div>
+        <div class="rpt-kpi__sub">Total qty semua item</div>
+      </div>
+      ${d.feesCollected>0?`
+      <div class="rpt-kpi rpt-kpi--purple">
+        <div class="rpt-kpi__icon">🏷️</div>
+        <div class="rpt-kpi__label">${appSettings.serviceFeeLabel||"Service Fee"}</div>
+        <div class="rpt-kpi__value">${fmt(d.feesCollected)}</div>
+        <div class="rpt-kpi__sub">Total fee terkumpul</div>
+      </div>`:""}
+      <div class="rpt-kpi rpt-kpi--slate">
+        <div class="rpt-kpi__icon">⏰</div>
+        <div class="rpt-kpi__label">Jam Tersibuk</div>
+        <div class="rpt-kpi__value">${d.peakHour>=0?d.peakHour.toString().padStart(2,"0")+":00":"-"}</div>
+        <div class="rpt-kpi__sub">${d.peakHour>=0?"Puncak penjualan":"Belum ada data"}</div>
+      </div>
+    </div>
+
+    <!-- ── Row 1: Item Terlaris + Payment Method ── -->
+    <div class="rpt-two-col">
+
+      <div class="rpt-card">
+        <div class="rpt-card__title">🏆 Item Terlaris</div>
+        <div class="rpt-table-wrap">
+          <table class="rpt-table">
+            <thead><tr><th>#</th><th>Item</th><th class="text-right">Qty</th><th class="text-right">Revenue</th><th class="text-right">% Total</th></tr></thead>
+            <tbody>
+              ${d.topItems.length===0
+                ?`<tr><td colspan="5" class="text-center text-slate-400 py-4">Tidak ada data</td></tr>`
+                :d.topItems.map((item,i)=>{
+                  const pct=d.grossRevenue?Math.round(item.revenue/d.grossRevenue*100):0;
+                  return `<tr>
+                    <td><span class="rpt-rank">${i+1}</span></td>
+                    <td class="font-medium">${item.name}</td>
+                    <td class="mono text-right">${item.qty}</td>
+                    <td class="mono text-right">${fmt(item.revenue)}</td>
+                    <td class="text-right text-slate-400 text-xs">${pct}%</td>
+                  </tr>`;
+                }).join("")}
+            </tbody>
+            ${d.topItems.length>0?`
+            <tfoot>
+              <tr class="rpt-tfoot">
+                <td colspan="2"><strong>Total (top ${d.topItems.length})</strong></td>
+                <td class="mono text-right"><strong>${d.topItems.reduce((s,i)=>s+i.qty,0)}</strong></td>
+                <td class="mono text-right"><strong>${fmt(d.topItems.reduce((s,i)=>s+i.revenue,0))}</strong></td>
+                <td></td>
+              </tr>
+            </tfoot>`:""}
+          </table>
+        </div>
+      </div>
+
+      <div class="flex flex-col gap-4">
+
+        <!-- Payment breakdown -->
+        <div class="rpt-card">
+          <div class="rpt-card__title">💳 Metode Pembayaran</div>
+          ${Object.entries(d.byPayment).length===0
+            ?`<div class="text-sm text-slate-400 py-4 text-center">Belum ada transaksi lunas</div>`
+            :Object.entries(d.byPayment).map(([pm,count])=>{
+              const pct=d.paid.length?Math.round(count/d.paid.length*100):0;
+              const pmColors={"Cash":"#10b981","QRIS":"#3b82f6","Transfer":"#8b5cf6","Debit":"#f59e0b"};
+              const col=pmColors[pm]||"#ea580c";
+              return `<div class="rpt-bar-row">
+                <div class="rpt-bar-label">${pm}</div>
+                <div class="rpt-bar-track"><div class="rpt-bar-fill" style="width:${pct}%;background:${col}"></div></div>
+                <div class="rpt-bar-count">${count} <span class="text-slate-400 text-xs">(${pct}%)</span></div>
+              </div>`;
+            }).join("")}
+        </div>
+
+        <!-- Status order -->
+        <div class="rpt-card">
+          <div class="rpt-card__title">📋 Status Order</div>
+          ${Object.entries(d.byStatus).map(([st,count])=>{
+            const pct=d.total?Math.round(count/d.total*100):0;
+            const cols={NEW:"#ef4444",COOKING:"#f59e0b",READY:"#10b981",DONE:"#64748b"};
+            const lbls={NEW:"Baru",COOKING:"Masak",READY:"Siap",DONE:"Selesai"};
+            return `<div class="rpt-bar-row">
+              <div class="rpt-bar-label">${lbls[st]||st}</div>
+              <div class="rpt-bar-track"><div class="rpt-bar-fill" style="width:${pct}%;background:${cols[st]||"#94a3b8"}"></div></div>
+              <div class="rpt-bar-count">${count} <span class="text-slate-400 text-xs">(${pct}%)</span></div>
+            </div>`;
+          }).join("")}
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Revenue per Kategori (NEW) ── -->
+    ${d.byCatArr.length>0?`
+    <div class="rpt-card">
+      <div class="rpt-card__title">🗂️ Revenue per Kategori</div>
+      <div class="rpt-cat-grid">
+        ${d.byCatArr.map(cat=>{
+          const maxRev=d.byCatArr[0]?.revenue||1;
+          const pct=Math.round(cat.revenue/maxRev*100);
+          const pctOfTotal=d.grossRevenue?Math.round(cat.revenue/d.grossRevenue*100):0;
+          return `<div class="rpt-cat-row">
+            <div class="rpt-cat-info">
+              <span class="rpt-cat-name">${cat.cat}</span>
+              <span class="rpt-cat-qty">${cat.qty} item</span>
+            </div>
+            <div class="rpt-bar-track" style="flex:1"><div class="rpt-bar-fill" style="width:${pct}%;background:#ea580c"></div></div>
+            <div class="rpt-cat-rev">
+              <span class="mono">${fmt(cat.revenue)}</span>
+              <span class="rpt-cat-pct">${pctOfTotal}%</span>
+            </div>
+          </div>`;
+        }).join("")}
+      </div>
+    </div>`:""}
+
+    <!-- ── Penjualan per Hari (multi-day) ── -->
+    ${isMultiDay&&d.daily.length>0?`
+    <div class="rpt-card">
+      <div class="rpt-card__title">📅 Penjualan per Hari</div>
+      <div class="rpt-table-wrap">
+        <table class="rpt-table">
+          <thead>
+            <tr>
+              <th>Tanggal</th>
+              <th class="text-center">Semua Order</th>
+              <th class="text-center">Order Lunas</th>
+              <th class="text-right">Revenue</th>
+              <th class="text-right">Rata-rata</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${d.daily.map(day=>`
+            <tr>
+              <td class="font-medium">${fmtDateStr(day.date)}</td>
+              <td class="text-center mono">${day.allOrders}</td>
+              <td class="text-center mono">${day.paidOrders}</td>
+              <td class="text-right mono">${fmt(day.revenue)}</td>
+              <td class="text-right mono text-slate-400">${fmt(day.paidOrders?Math.round(day.revenue/day.paidOrders):0)}</td>
+            </tr>`).join("")}
+          </tbody>
+          <tfoot>
+            <tr class="rpt-tfoot">
+              <td><strong>Total</strong></td>
+              <td class="text-center mono"><strong>${d.daily.reduce((s,r)=>s+r.allOrders,0)}</strong></td>
+              <td class="text-center mono"><strong>${d.daily.reduce((s,r)=>s+r.paidOrders,0)}</strong></td>
+              <td class="text-right mono"><strong>${fmt(d.daily.reduce((s,r)=>s+r.revenue,0))}</strong></td>
+              <td></td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </div>`:""}
+
+    <!-- ── Grafik per Jam ── -->
+    <div class="rpt-card">
+      <div class="rpt-card__title">⏰ Grafik Penjualan per Jam</div>
+      <div class="rpt-hour-wrap">
+        <div class="rpt-hour-grid">
+          ${d.byHour.map((val,h)=>{
+            const max=Math.max(...d.byHour,1);
+            const pct=Math.round(val/max*100);
+            const isActive=val>0;
+            const isPeak=h===d.peakHour&&val>0;
+            return `<div class="rpt-hour-cell" title="${h.toString().padStart(2,"0")}:00&#10;${fmt(val)}">
+              <div class="rpt-hour-bar${isPeak?" rpt-hour-bar--peak":""}"
+                style="height:${Math.max(3,pct)}%;background:${isPeak?"#ea580c":pct>60?"#f97316":pct>25?"#fed7aa":"#f1f5f9"}">
+              </div>
+              <div class="rpt-hour-label ${isActive?isPeak?"text-orange-600 font-bold":"text-slate-500":"text-slate-200"}">${h.toString().padStart(2,"0")}</div>
+            </div>`;
+          }).join("")}
+        </div>
+        ${d.peakHour>=0?`<div class="rpt-hour-note">Puncak penjualan: <strong>${d.peakHour.toString().padStart(2,"0")}:00</strong> - ${fmt(d.byHour[d.peakHour])}</div>`:""}
+      </div>
+    </div>
+
+    <!-- ── Detail Transaksi ── -->
+    <div class="rpt-card">
+      <div class="rpt-card__title">📝 Detail Transaksi <span class="rpt-count-badge">${d.orders.length} order</span></div>
+      <div class="rpt-table-wrap">
+        <table class="rpt-table">
+          <thead>
+            <tr>
+              <th>No. Order</th>
+              <th>Waktu</th>
+              <th>Customer</th>
+              <th>Area</th>
+              <th>Item</th>
+              <th class="text-center">Status</th>
+              <th class="text-center">Metode</th>
+              <th class="text-center">Bayar</th>
+              <th class="text-right">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${d.orders.map(o=>`
+            <tr class="${o.paymentStatus==="PAID"?"":"rpt-row-unpaid"}">
+              <td class="mono font-bold text-xs">${o.orderId||"-"}</td>
+              <td class="mono text-xs text-slate-400 whitespace-nowrap">${fmtDtFull(o.createdAt)}</td>
+              <td class="text-sm">${o.customerName||"-"}</td>
+              <td class="text-center text-xs">${o.areaCode||"-"}</td>
+              <td class="text-xs text-slate-500">${(o.items||[]).map(i=>`${i.qty}× ${i.name}`).join(", ")}</td>
+              <td class="text-center"><span class="rpt-status-badge rpt-status-${(o.orderStatus||"").toLowerCase()}">${STATUS_LABEL[o.orderStatus]||o.orderStatus}</span></td>
+              <td class="text-center text-xs">${o.paymentMethod||"-"}</td>
+              <td class="text-center"><span class="rpt-pay-badge rpt-pay-${(o.paymentStatus||"").toLowerCase()}">${o.paymentStatus||"-"}</span></td>
+              <td class="text-right mono font-semibold text-sm">${fmt(o.total||0)}</td>
+            </tr>`).join("")}
+          </tbody>
+          <tfoot>
+            <tr class="rpt-tfoot">
+              <td colspan="8" class="text-right"><strong>Total Revenue (PAID)</strong></td>
+              <td class="text-right mono"><strong>${fmt(d.grossRevenue)}</strong></td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </div>
+
+  </div>`;
+}
+
+// ── Export Excel ──────────────────────────────────────────────
+function exportExcel() {
+  if(!reportOrders.length){ showToast("Load laporan dulu","error"); return; }
+  if(typeof XLSX==="undefined"){ showToast("SheetJS belum dimuat, coba refresh","error"); return; }
+
+  const d     = buildReportData();
+  const wb    = XLSX.utils.book_new();
+  const store = appSettings.storeName||"Sawah Senja";
+  const period= d.dateFrom===d.dateTo ? fmtDateStr(d.dateFrom) : `${fmtDateStr(d.dateFrom)} - ${fmtDateStr(d.dateTo)}`;
+  const dicetak = new Date().toLocaleString("id-ID");
+
+  // ── Sheet 1: Ringkasan ──
+  const feeLabel = appSettings.serviceFeeLabel||"Service Fee";
+  const ws1data = [
+    [`LAPORAN PENJUALAN - ${store}`],
+    [`Periode: ${period}`],
+    [`Dicetak: ${dicetak}`],
+    [],
+    ["RINGKASAN UTAMA","",""],
+    ["Metrik","Nilai",""],
+    ["Total Order",              d.total,              ""],
+    ["Order Lunas",              d.paid.length,        ""],
+    ["Order Tidak Lunas",        d.total-d.paid.length,""],
+    ["Total Revenue (PAID)",     d.grossRevenue,       ""],
+    ["Revenue Bersih (excl. fee)",d.netRevenue,        ""],
+    [feeLabel+" Terkumpul",      d.feesCollected,      ""],
+    ["Rata-rata / Order",        d.avgOrderValue,      ""],
+    ["Total Item Terjual",       d.totalItems,         ""],
+    ["Jam Tersibuk",             d.peakHour>=0?`${d.peakHour.toString().padStart(2,"0")}:00`:"-",""],
+    [],
+    ["METODE PEMBAYARAN","",""],
+    ["Metode","Jumlah","% dari Transaksi Lunas"],
+    ...Object.entries(d.byPayment).map(([pm,count])=>[
+      pm, count,
+      d.paid.length ? (count/d.paid.length*100).toFixed(1)+"%" : "0%"
+    ]),
+    [],
+    ["STATUS ORDER","",""],
+    ["Status","Jumlah","% dari Total"],
+    ...Object.entries(d.byStatus).map(([st,count])=>[
+      STATUS_LABEL[st]||st, count,
+      d.total ? (count/d.total*100).toFixed(1)+"%" : "0%"
+    ]),
+    [],
+    ["REVENUE PER KATEGORI","",""],
+    ["Kategori","Revenue","Qty Item"],
+    ...d.byCatArr.map(cat=>[cat.cat, cat.revenue, cat.qty]),
+  ];
+  const ws1 = XLSX.utils.aoa_to_sheet(ws1data);
+  ws1["!cols"] = [{wch:32},{wch:22},{wch:22}];
+  XLSX.utils.book_append_sheet(wb, ws1, "Ringkasan");
+
+  // ── Sheet 2: Transaksi ──
+  const txHeader = [
+    "No. Order","Tanggal","Jam","Customer","WhatsApp","Area",
+    "Status Order","Metode Bayar","Status Bayar",
+    "Subtotal","Service Fee","Total","Uang Diterima","Kembalian"
+  ];
+  const txRows = d.orders.map(o=>{
+    const dt=o.createdAt?.toDate?.()||new Date();
+    return [
+      o.orderId||"",
+      dt.toLocaleDateString("id-ID"),
+      dt.toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"}),
+      o.customerName||"",
+      o.customerWhatsapp||"",
+      o.areaCode||"",
+      STATUS_LABEL[o.orderStatus]||o.orderStatus||"",
+      o.paymentMethod||"",
+      o.paymentStatus||"",
+      o.subtotal||0,
+      o.serviceFee||0,
+      o.total||0,
+      o.cashPaid||"",
+      o.cashChange||"",
+    ];
+  });
+  // Summary row at bottom
+  txRows.push([]);
+  txRows.push([
+    "TOTAL","","","","","","","","PAID only",
+    d.paid.reduce((s,o)=>s+(o.subtotal||0),0),
+    d.paid.reduce((s,o)=>s+(o.serviceFee||0),0),
+    d.grossRevenue,"",""
+  ]);
+  const ws2 = XLSX.utils.aoa_to_sheet([txHeader,...txRows]);
+  ws2["!cols"]=[{wch:14},{wch:12},{wch:6},{wch:20},{wch:16},{wch:8},{wch:12},{wch:12},{wch:12},{wch:14},{wch:14},{wch:14},{wch:14},{wch:14}];
+  XLSX.utils.book_append_sheet(wb, ws2, "Transaksi");
+
+  // ── Sheet 3: Item Terlaris ──
+  const itemHeader=["Peringkat","Nama Item","Qty Terjual","Revenue","% dari Total Revenue"];
+  const itemRows  =d.topItems.map((item,i)=>[
+    i+1, item.name, item.qty, item.revenue,
+    d.grossRevenue?(item.revenue/d.grossRevenue*100).toFixed(1)+"%":"0%"
+  ]);
+  const ws3=XLSX.utils.aoa_to_sheet([itemHeader,...itemRows]);
+  ws3["!cols"]=[{wch:10},{wch:32},{wch:14},{wch:18},{wch:20}];
+  XLSX.utils.book_append_sheet(wb, ws3, "Item Terlaris");
+
+  // ── Sheet 4: Per Kategori (NEW) ──
+  if(d.byCatArr.length>0){
+    const catHeader=["Kategori","Revenue","Qty Item","% dari Total Revenue"];
+    const catRows  =d.byCatArr.map(cat=>[
+      cat.cat, cat.revenue, cat.qty,
+      d.grossRevenue?(cat.revenue/d.grossRevenue*100).toFixed(1)+"%":"0%"
+    ]);
+    const ws4=XLSX.utils.aoa_to_sheet([catHeader,...catRows]);
+    ws4["!cols"]=[{wch:20},{wch:18},{wch:12},{wch:20}];
+    XLSX.utils.book_append_sheet(wb, ws4, "Per Kategori");
+  }
+
+  // ── Sheet 5: Per Hari ──
+  if(d.daily.length>0){
+    const dayHeader=["Tanggal","Semua Order","Order Lunas","Revenue","Rata-rata/Order Lunas"];
+    const dayRows  =d.daily.map(day=>[
+      fmtDateStr(day.date),
+      day.allOrders,
+      day.paidOrders,
+      day.revenue,
+      day.paidOrders?Math.round(day.revenue/day.paidOrders):0
+    ]);
+    dayRows.push(["TOTAL",
+      d.daily.reduce((s,r)=>s+r.allOrders,0),
+      d.daily.reduce((s,r)=>s+r.paidOrders,0),
+      d.daily.reduce((s,r)=>s+r.revenue,0),""
+    ]);
+    const ws5=XLSX.utils.aoa_to_sheet([dayHeader,...dayRows]);
+    ws5["!cols"]=[{wch:22},{wch:14},{wch:14},{wch:16},{wch:22}];
+    XLSX.utils.book_append_sheet(wb, ws5, "Per Hari");
+  }
+
+  // ── Sheet 6: Detail per Item ──
+  const detHeader=["No. Order","Tanggal","Customer","Area","Nama Item","Kategori","Qty","Harga Satuan","Subtotal Item","Catatan"];
+  const detRows  =[];
+  d.orders.forEach(o=>{
+    const dt=o.createdAt?.toDate?.()||new Date();
+    (o.items||[]).forEach(i=>{
+      detRows.push([
+        o.orderId||"",
+        dt.toLocaleDateString("id-ID"),
+        o.customerName||"",
+        o.areaCode||"",
+        i.name||"",
+        i.category||"",
+        i.qty||0,
+        i.price||0,
+        (i.price||0)*(i.qty||0),
+        i.notes||"",
+      ]);
+    });
+  });
+  const ws6=XLSX.utils.aoa_to_sheet([detHeader,...detRows]);
+  ws6["!cols"]=[{wch:14},{wch:12},{wch:18},{wch:8},{wch:28},{wch:14},{wch:6},{wch:14},{wch:16},{wch:24}];
+  XLSX.utils.book_append_sheet(wb, ws6, "Detail Item");
+
+  // ── Download ──
+  const fname=`Laporan_${store.replace(/\s+/g,"_")}_${d.dateFrom}_${d.dateTo}.xlsx`;
+  XLSX.writeFile(wb, fname);
+  showToast(`Excel (${wb.SheetNames.length} sheet) diunduh!`,"success");
+}
+window.exportExcel = exportExcel;
+
+// ── Export CSV (transactions only) ───────────────────────────
+function exportCSV() {
+  if(!reportOrders.length){ showToast("Load laporan dulu","error"); return; }
+  const d = buildReportData();
+  const rows = [
+    ["No. Order","Tanggal","Jam","Customer","WhatsApp","Area","Status","Pembayaran","Status Bayar","Subtotal","Service Fee","Total"],
+    ...d.orders.map(o=>{
+      const dt = o.createdAt?.toDate?.() || new Date();
+      return [
+        o.orderId||"",
+        dt.toLocaleDateString("id-ID"),
+        dt.toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"}),
+        o.customerName||"",
+        o.customerWhatsapp||"",
+        o.areaCode||"",
+        STATUS_LABEL[o.orderStatus]||"",
+        o.paymentMethod||"",
+        o.paymentStatus||"",
+        o.subtotal||0,
+        o.serviceFee||0,
+        o.total||0,
+      ];
+    })
+  ];
+  const csv = rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(",")).join("\n");
+  const blob = new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8;"});
+  const a    = document.createElement("a");
+  a.href     = URL.createObjectURL(blob);
+  a.download = `Transaksi_${d.dateFrom}_${d.dateTo}.csv`;
+  a.click();
+  showToast("CSV berhasil diunduh!","success");
+}
+window.exportCSV = exportCSV;
+
+// ── Print report ──────────────────────────────────────────────
+function printReport() {
+  if(!reportOrders.length){ showToast("Load laporan dulu","error"); return; }
+  window.print();
+}
+window.printReport = printReport;
+
+// ── Quick date shortcuts ──────────────────────────────────────
+function setReportRange(preset) {
+  const today  = new Date();
+  const isoDay = d => d.toISOString().slice(0,10);  // renamed - tidak shadow fmt()
+  let from, to = isoDay(today);
+
+  if(preset==="today")    { from=to; }
+  if(preset==="yesterday"){ const y=new Date(today); y.setDate(y.getDate()-1); from=to=isoDay(y); }
+  if(preset==="week")     { const w=new Date(today); w.setDate(w.getDate()-6); from=isoDay(w); }
+  if(preset==="month")    { const m=new Date(today.getFullYear(),today.getMonth(),1); from=isoDay(m); }
+  if(preset==="lastmonth"){
+    const lm =new Date(today.getFullYear(),today.getMonth()-1,1);
+    const lme=new Date(today.getFullYear(),today.getMonth(),0);
+    from=isoDay(lm); to=isoDay(lme);
+  }
+
+  const fromEl=document.getElementById("rpt-from");
+  const toEl  =document.getElementById("rpt-to");
+  if(fromEl) fromEl.value=from;
+  if(toEl)   toEl.value=to;
+}
+window.setReportRange = setReportRange;
+
+
 // ─────────────────────────────────────────────────────────────
 // TAB SWITCH
 // ─────────────────────────────────────────────────────────────
 function switchTab(tab) {
   activeTab=tab;
-  ["orders","menu","settings"].forEach(t=>{
+  ["orders","menu","report","settings"].forEach(t=>{
     document.getElementById("tab-"+t)?.classList.toggle("main-tab--active",   t===tab);
     document.getElementById("tab-"+t)?.classList.toggle("main-tab--inactive", t!==tab);
     const sec=document.getElementById(t+"-section");
@@ -1061,6 +1716,7 @@ function switchTab(tab) {
   });
   if(tab==="menu")     renderMenuManager();
   if(tab==="settings") renderSettingsPanel();
+  if(tab==="report")   renderReportPanel();
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1113,6 +1769,7 @@ document.addEventListener("DOMContentLoaded",()=>{
   document.getElementById("search-input").addEventListener("input",e=>{ searchQuery=e.target.value; renderOrders(); });
   document.getElementById("tab-orders").addEventListener("click",()=>switchTab("orders"));
   document.getElementById("tab-menu").addEventListener("click",()=>switchTab("menu"));
+  document.getElementById("tab-report").addEventListener("click",()=>switchTab("report"));
   document.getElementById("tab-settings").addEventListener("click",()=>switchTab("settings"));
 
   window.updateImagePreview=updateImagePreview;
@@ -1374,6 +2031,139 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);}
 .pos-quick-btn:hover{background:#fef3c7;border-color:#fcd34d;color:#92400e;}
 .pos-quick-btn:active{transform:scale(.96);}
 
+/* ── REPORT ── */
+@keyframes spin{to{transform:rotate(360deg);}}
+
+/* Controls bar */
+.rpt-controls{
+  background:#fff;border:1px solid var(--border);border-radius:var(--radius);
+  padding:16px;margin-bottom:20px;display:flex;flex-direction:column;gap:12px;
+  box-shadow:0 1px 3px rgba(0,0,0,.04);
+}
+.rpt-controls__left{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+.rpt-date-group{display:flex;flex-direction:column;gap:3px;}
+.rpt-date-label{font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;}
+.rpt-date-input{background:var(--bg);border:1.5px solid var(--border2);border-radius:9px;padding:8px 10px;font-size:13px;color:var(--text);font-family:var(--font);outline:none;transition:border-color .15s;}
+.rpt-date-input:focus{border-color:var(--orange);}
+.rpt-btn-load{display:inline-flex;align-items:center;gap:6px;padding:9px 18px;background:var(--orange);color:#fff;font-family:var(--font);font-size:13px;font-weight:700;border:none;border-radius:9px;cursor:pointer;transition:all .15s;box-shadow:0 2px 8px rgba(234,88,12,.25);}
+.rpt-btn-load:hover{background:var(--orange2);transform:translateY(-1px);}
+.rpt-btn-load:active{transform:scale(.97);}
+
+/* Preset shortcuts */
+.rpt-presets{display:flex;gap:6px;flex-wrap:wrap;}
+.rpt-preset{padding:6px 12px;background:var(--bg);border:1.5px solid var(--border2);border-radius:7px;font-family:var(--font);font-size:12px;font-weight:600;color:var(--text2);cursor:pointer;transition:all .15s;white-space:nowrap;}
+.rpt-preset:hover{background:#fff7ed;border-color:#fed7aa;color:#92400e;}
+.rpt-preset:active{transform:scale(.96);}
+
+/* Export buttons */
+.rpt-exports{display:flex;gap:8px;flex-wrap:wrap;}
+.rpt-btn-export{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border:1.5px solid;border-radius:9px;font-family:var(--font);font-size:12px;font-weight:700;cursor:pointer;transition:all .15s;}
+.rpt-btn-export:hover{transform:translateY(-1px);}
+.rpt-btn-export:active{transform:scale(.97);}
+.rpt-btn-excel{background:#f0fdf4;color:#166534;border-color:#86efac;}.rpt-btn-excel:hover{background:#dcfce7;}
+.rpt-btn-csv{background:#eff6ff;color:#1d4ed8;border-color:#93c5fd;}.rpt-btn-csv:hover{background:#dbeafe;}
+.rpt-btn-print{background:#f8fafc;color:#475569;border-color:#cbd5e1;}.rpt-btn-print:hover{background:#f1f5f9;}
+
+/* KPI cards */
+.rpt-kpi-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-bottom:20px;}
+@media(min-width:640px){.rpt-kpi-grid{grid-template-columns:repeat(3,1fr);}}
+@media(min-width:1024px){.rpt-kpi-grid{grid-template-columns:repeat(6,1fr);}}
+.rpt-kpi{background:#fff;border:1.5px solid var(--border);border-radius:var(--radius);padding:16px;border-top-width:3px;}
+.rpt-kpi--green {border-top-color:#10b981;}
+.rpt-kpi--blue  {border-top-color:#3b82f6;}
+.rpt-kpi--amber {border-top-color:#f59e0b;}
+.rpt-kpi--slate {border-top-color:#64748b;}
+.rpt-kpi--purple{border-top-color:#8b5cf6;}
+.rpt-kpi__label{font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;}
+.rpt-kpi__value{font-size:18px;font-weight:800;color:var(--text);line-height:1.1;margin-bottom:4px;}
+.rpt-kpi__sub  {font-size:11px;color:var(--text3);}
+
+/* Two-col layout */
+.rpt-two-col{display:grid;grid-template-columns:1fr;gap:16px;margin-bottom:20px;}
+@media(min-width:768px){.rpt-two-col{grid-template-columns:1fr 1fr;}}
+
+/* Report cards */
+.rpt-card{background:#fff;border:1.5px solid var(--border);border-radius:var(--radius);padding:20px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.04);}
+.rpt-card__title{font-size:14px;font-weight:800;color:var(--text);margin-bottom:14px;}
+
+/* Tables */
+.rpt-table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;}
+.rpt-table{width:100%;border-collapse:collapse;font-size:13px;}
+.rpt-table th{padding:8px 10px;background:#f8fafc;font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;border-bottom:2px solid var(--border);text-align:left;white-space:nowrap;}
+.rpt-table td{padding:9px 10px;border-bottom:1px solid #f1f5f9;color:var(--text2);vertical-align:top;}
+.rpt-table tbody tr:hover td{background:#fafbfc;}
+.rpt-table .mono{font-family:var(--font-mono);}
+.rpt-tfoot td{background:#f8fafc;font-weight:700;color:var(--text);padding:10px;border-top:2px solid var(--border);}
+.rpt-rank{display:inline-flex;width:20px;height:20px;border-radius:50%;background:var(--orange);color:#fff;font-size:10px;font-weight:800;align-items:center;justify-content:center;margin-right:8px;flex-shrink:0;}
+
+/* Bar charts */
+.rpt-bar-row{display:flex;align-items:center;gap:10px;padding:5px 0;}
+.rpt-bar-label{font-size:13px;font-weight:600;color:var(--text);min-width:80px;flex-shrink:0;}
+.rpt-bar-track{flex:1;height:8px;background:#f1f5f9;border-radius:4px;overflow:hidden;}
+.rpt-bar-fill{height:100%;background:var(--orange);border-radius:4px;transition:width .5s ease;}
+.rpt-bar-count{font-family:var(--font-mono);font-size:12px;font-weight:700;color:var(--text2);min-width:80px;text-align:right;}
+
+/* Hour heatmap */
+.rpt-hour-wrap{display:flex;flex-direction:column;gap:8px;}
+.rpt-hour-grid{display:flex;align-items:flex-end;gap:3px;height:100px;padding-bottom:20px;position:relative;}
+.rpt-hour-cell{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;position:relative;}
+.rpt-hour-bar{width:100%;border-radius:3px 3px 0 0;transition:height .5s ease;min-height:3px;}
+.rpt-hour-bar--peak{box-shadow:0 0 8px rgba(234,88,12,.4);}
+.rpt-hour-label{font-size:8px;font-family:var(--font-mono);margin-top:3px;position:absolute;bottom:0;left:50%;transform:translateX(-50%);white-space:nowrap;}
+.rpt-hour-note{font-size:12px;color:var(--text2);text-align:center;padding:4px 0;}
+
+/* Status / pay badges in table */
+.rpt-status-badge,.rpt-pay-badge{display:inline-flex;font-size:10px;font-weight:700;padding:2px 7px;border-radius:100px;}
+.rpt-status-new    {background:#fee2e2;color:#dc2626;}
+.rpt-status-cooking{background:#fef3c7;color:#d97706;}
+.rpt-status-ready  {background:#d1fae5;color:#059669;}
+.rpt-status-done   {background:#f1f5f9;color:#64748b;}
+.rpt-pay-paid      {background:#d1fae5;color:#059669;}
+.rpt-pay-pending   {background:#fef3c7;color:#d97706;}
+.rpt-pay-unpaid    {background:#fee2e2;color:#dc2626;}
+
+/* Category chart */
+.rpt-cat-grid{display:flex;flex-direction:column;gap:8px;}
+.rpt-cat-row{display:flex;align-items:center;gap:10px;}
+.rpt-cat-info{display:flex;flex-direction:column;min-width:90px;flex-shrink:0;}
+.rpt-cat-name{font-size:13px;font-weight:700;color:var(--text);}
+.rpt-cat-qty{font-size:11px;color:var(--text3);}
+.rpt-cat-rev{display:flex;flex-direction:column;align-items:flex-end;min-width:100px;flex-shrink:0;}
+.rpt-cat-pct{font-size:10px;color:var(--text3);}
+
+/* KPI teal variant */
+.rpt-kpi--teal{border-top-color:#0d9488;}
+.rpt-kpi__icon{font-size:20px;margin-bottom:6px;}
+
+/* Count badge in card title */
+.rpt-count-badge{display:inline-flex;font-size:11px;font-weight:700;padding:2px 8px;border-radius:100px;background:#f1f5f9;color:#64748b;margin-left:8px;vertical-align:middle;}
+
+/* Unpaid row dimming */
+.rpt-row-unpaid td{opacity:.65;}
+
+/* Print header */
+.rpt-print-header{display:none;}
+@media print {
+  .rpt-print-header{display:block;text-align:center;margin-bottom:24px;padding-bottom:16px;border-bottom:2px solid #e2e8f0;}
+  .rpt-print-store{font-size:20px;font-weight:800;color:#0f172a;}
+  .rpt-print-title{font-size:14px;font-weight:700;color:#475569;margin:4px 0;}
+  .rpt-print-period{font-size:13px;color:#64748b;}
+  .rpt-print-date{font-size:11px;color:#94a3b8;margin-top:4px;}
+}
+
+/* Print-only styles */
+@media print {
+  .app-header,.rpt-controls,.rpt-exports,.rpt-presets,
+  #btn-logout,#btn-refresh,#btn-fullscreen,.no-print
+  { display:none!important; }
+  body{background:#fff;}
+  .rpt-card{box-shadow:none;border:1px solid #e2e8f0;break-inside:avoid;}
+  .rpt-kpi{break-inside:avoid;}
+  main{padding:0;}
+  #report-section{display:block!important;}
+  #orders-section,#menu-section,#settings-section{display:none!important;}
+}
+
 /* ── PULSE ── */
 .pulse-dot{animation:pulseDot 2s infinite;}
 @keyframes pulseDot{0%,100%{opacity:1;}50%{opacity:.4;}}
@@ -1451,10 +2241,11 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);}
         </div>
       </div>
     </div>
-    <div class="max-w-7xl mx-auto px-4 pb-2.5 flex items-center gap-1.5">
-      <button id="tab-orders"   class="main-tab main-tab--active">📋 Pesanan</button>
-      <button id="tab-menu"     class="main-tab main-tab--inactive">🍽️ Kelola Menu</button>
-      <button id="tab-settings" class="main-tab main-tab--inactive">⚙️ Pengaturan</button>
+    <div class="max-w-7xl mx-auto px-4 pb-2.5 flex items-center gap-1.5 overflow-x-auto">
+      <button id="tab-orders"   class="main-tab main-tab--active flex-shrink-0">📋 Pesanan</button>
+      <button id="tab-menu"     class="main-tab main-tab--inactive flex-shrink-0">🍽️ Kelola Menu</button>
+      <button id="tab-report"   class="main-tab main-tab--inactive flex-shrink-0">📊 Laporan</button>
+      <button id="tab-settings" class="main-tab main-tab--inactive flex-shrink-0">⚙️ Pengaturan</button>
     </div>
   </header>
 
@@ -1515,6 +2306,59 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);}
       </div>
       <div id="menu-manager-panel" class="space-y-1">
         <div class="skeleton h-12 rounded-xl"></div><div class="skeleton h-12 rounded-xl mt-2"></div>
+      </div>
+    </div>
+
+    <!-- REPORT SECTION -->
+    <div id="report-section" style="display:none">
+      <!-- Controls -->
+      <div class="rpt-controls">
+        <div class="rpt-controls__left">
+          <div class="rpt-date-group">
+            <label class="rpt-date-label">Dari</label>
+            <input type="date" id="rpt-from" class="rpt-date-input"/>
+          </div>
+          <span class="text-slate-400 text-sm font-medium">-</span>
+          <div class="rpt-date-group">
+            <label class="rpt-date-label">Sampai</label>
+            <input type="date" id="rpt-to" class="rpt-date-input"/>
+          </div>
+          <button onclick="loadReportOrders()" class="rpt-btn-load">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+            Tampilkan
+          </button>
+        </div>
+        <!-- Shortcut presets -->
+        <div class="rpt-presets">
+          <button onclick="setReportRange('today');loadReportOrders()" class="rpt-preset">Hari Ini</button>
+          <button onclick="setReportRange('yesterday');loadReportOrders()" class="rpt-preset">Kemarin</button>
+          <button onclick="setReportRange('week');loadReportOrders()" class="rpt-preset">7 Hari</button>
+          <button onclick="setReportRange('month');loadReportOrders()" class="rpt-preset">Bulan Ini</button>
+          <button onclick="setReportRange('lastmonth');loadReportOrders()" class="rpt-preset">Bln Lalu</button>
+        </div>
+        <!-- Export buttons -->
+        <div class="rpt-exports">
+          <button onclick="exportExcel()" class="rpt-btn-export rpt-btn-excel">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+            Excel (.xlsx)
+          </button>
+          <button onclick="exportCSV()" class="rpt-btn-export rpt-btn-csv">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+            CSV
+          </button>
+          <button onclick="printReport()" class="rpt-btn-export rpt-btn-print">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/></svg>
+            Print / PDF
+          </button>
+        </div>
+      </div>
+      <!-- Report content -->
+      <div id="report-panel">
+        <div class="flex flex-col items-center justify-center py-20 gap-3 text-center">
+          <div class="text-4xl">📊</div>
+          <div class="font-bold text-slate-500">Pilih tanggal laporan</div>
+          <div class="text-sm text-slate-400">Pilih rentang tanggal atau gunakan shortcut di atas.</div>
+        </div>
       </div>
     </div>
 
