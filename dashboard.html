@@ -323,6 +323,103 @@ async function deleteAllDone() {
 window.deleteAllDone=deleteAllDone;
 
 // ─────────────────────────────────────────────────────────────
+// KOT - Kitchen Order Ticket (cetak ke printer thermal dapur)
+// ─────────────────────────────────────────────────────────────
+function printKOT(order) {
+  const now    = new Date();
+  const jam    = now.toLocaleTimeString("id-ID", {hour:"2-digit", minute:"2-digit"});
+  const tgl    = now.toLocaleDateString("id-ID", {day:"2-digit", month:"2-digit", year:"2-digit"});
+  const SEP58  = "─".repeat(32);
+  const SEP58D = "═".repeat(32);
+
+  // Build item rows
+  const itemRows = (order.items||[]).map(i => {
+    const qty  = String(i.qty).padStart(2);
+    const name = i.name;
+    const note = i.notes ? `   >> ${i.notes}` : "";
+    return `${qty}x ${name}${note ? "
+" + note : ""}`;
+  }).join("
+");
+
+  // KOT HTML - dioptimasi untuk 58mm thermal
+  const kotHtml = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8"/>
+<style>
+  @page {
+    width: 58mm;
+    margin: 2mm 3mm;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 12px;
+    width: 52mm;
+    color: #000;
+    background: #fff;
+  }
+  .center  { text-align: center; }
+  .bold    { font-weight: bold; }
+  .large   { font-size: 16px; font-weight: bold; }
+  .xlarge  { font-size: 20px; font-weight: bold; letter-spacing: 2px; }
+  .sep     { white-space: pre; font-size: 10px; line-height: 1.2; }
+  .section { margin: 3px 0; }
+  .item    { margin: 4px 0; line-height: 1.5; }
+  .note    { font-size: 11px; padding-left: 6px; font-style: italic; }
+  .meta    { font-size: 11px; }
+  .area    { font-size: 14px; font-weight: bold; }
+  .footer  { font-size: 10px; text-align: center; margin-top: 4px; }
+</style>
+</head>
+<body>
+
+  <div class="section center">
+    <div class="bold" style="font-size:11px">KITCHEN ORDER TICKET</div>
+    <div class="bold" style="font-size:10px">${appSettings.storeName||"Sawah Senja"}</div>
+  </div>
+
+  <div class="sep">${SEP58D}</div>
+
+  <div class="section">
+    <div class="meta">No  : <span class="bold">${order.orderId||"-"}</span></div>
+    <div class="meta">Area: <span class="area">${order.areaCode||"-"}</span></div>
+    <div class="meta">Jam : ${jam} &nbsp; ${tgl}</div>
+    <div class="meta">Tamu: ${order.customerName||"-"}</div>
+  </div>
+
+  <div class="sep">${SEP58D}</div>
+
+  <div class="section bold center" style="font-size:13px">DAFTAR MASAK</div>
+  <div class="sep">${SEP58}</div>
+
+  <div class="section">
+    ${(order.items||[]).map(i=>`
+    <div class="item">
+      <div class="bold">${String(i.qty).padStart(2)}x  ${i.name}</div>
+      ${i.notes ? `<div class="note">&#x21B3; ${i.notes}</div>` : ""}
+    </div>`).join("")}
+  </div>
+
+  <div class="sep">${SEP58}</div>
+  <div class="footer">*** SEGERA DIPROSES ***</div>
+  <div style="height:8mm"></div>
+
+</body>
+</html>`;
+
+  // Buka popup print
+  const win = window.open("", "_blank", "width=300,height=500");
+  if (!win) { showToast("Popup diblokir browser. Izinkan popup untuk print.", "error"); return; }
+  win.document.write(kotHtml);
+  win.document.close();
+  win.focus();
+  setTimeout(() => { win.print(); win.close(); }, 400);
+}
+window.printKOT = printKOT;
+
+// ─────────────────────────────────────────────────────────────
 // WA - READY NOTIFICATION (bukan nota)
 // ─────────────────────────────────────────────────────────────
 // ── Template interpolation engine ──────────────────────────
@@ -655,7 +752,8 @@ function renderOrders() {
       if(!order) return;
       if(action==="start-cooking")  updateStatus(id,"COOKING");
       if(action==="mark-ready")     updateStatus(id,"READY");
-      if(action==="open-pos")       openPOS(order);      // FIX B8: POS instead of direct complete
+      if(action==="open-pos")       openPOS(order);
+      if(action==="print-kot")      printKOT(order);      // FIX B8: POS instead of direct complete
       if(action==="send-wa")        sendReadyWA(order);  // FIX B9: ready notification only
       if(action==="send-receipt")   sendReceiptWA(order);
       if(action==="delete-order")   deleteOrder(id,btn.dataset.label);
@@ -680,6 +778,17 @@ function buildCard(o) {
   let actionBtn="";
   if(o.orderStatus==="NEW")
     actionBtn=`<button data-action="start-cooking" data-id="${o.id}" class="act-btn act-btn--amber">▶ Mulai Masak</button>`;
+
+  // Tombol print KOT - tampil di NEW dan COOKING
+  const kotBtn = (o.orderStatus==="NEW"||o.orderStatus==="COOKING")
+    ? `<button data-action="print-kot" data-id="${o.id}"
+         class="act-btn act-btn--kot" title="Print Kitchen Order Ticket ke printer thermal">
+         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+           <path stroke-linecap="round" stroke-linejoin="round" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/>
+         </svg>
+         KOT
+       </button>`
+    : "";
   else if(o.orderStatus==="COOKING")
     actionBtn=`<button data-action="mark-ready" data-id="${o.id}" class="act-btn act-btn--green">✔ Tandai Siap</button>`;
   else if(o.orderStatus==="READY")
@@ -747,7 +856,7 @@ function buildCard(o) {
           : `<div class="text-right"><div class="text-[10px] text-slate-400 uppercase tracking-wide font-semibold">Menunggu</div><div class="text-sm font-mono font-semibold ${elapsed>15?"text-red-500":elapsed>8?"text-amber-500":"text-slate-400"}">${elapsed} mnt</div></div>`
         }
       </div>
-      <div class="flex gap-2 flex-wrap items-center">${actionBtn}${waBtn}${doneActions}</div>
+      <div class="flex gap-2 flex-wrap items-center">${actionBtn}${kotBtn}${waBtn}${doneActions}</div>
     </div>
   </div>`;
 }
@@ -2035,6 +2144,8 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);}
 .act-btn--delete{background:#f8fafc;color:#94a3b8;border:1.5px solid var(--border);}.act-btn--delete:hover{background:#fee2e2;color:#dc2626;border-color:#fca5a5;}
 /* POS button - prominent */
 .act-btn--pos{background:linear-gradient(135deg,var(--orange),var(--orange2));color:#fff;border:none;box-shadow:0 2px 8px rgba(234,88,12,.3);}.act-btn--pos:hover{opacity:.9;box-shadow:0 4px 12px rgba(234,88,12,.4);}
+/* KOT print button */
+.act-btn--kot{background:#faf5ff;color:#6d28d9;border:1.5px solid #c4b5fd;}.act-btn--kot:hover{background:#ede9fe;}
 
 .avatar{width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,var(--orange),var(--orange2));display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;color:#fff;flex-shrink:0;}
 
