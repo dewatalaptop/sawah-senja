@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<meta name="theme-color" content="#ffffff"/>
+<title>Nota - Sawah Senja</title>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getFirestore, doc, getDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+// ── CONFIG - sama dengan dashboard ──
+const firebaseConfig = {
+  apiKey:            "AIzaSyBPwP08GotnhWJ7A2d3VH09az5NSiMUPBo",
+  authDomain:        "sawah-senja.firebaseapp.com",
+  projectId:         "sawah-senja",
+  storageBucket:     "sawah-senja.firebasestorage.app",
+  messagingSenderId: "568071270673",
+  appId:             "1:568071270673:web:15d54aeb8c01a81b491cb0"
+};
+const app = initializeApp(firebaseConfig);
+const db  = getFirestore(app);
+
+// ── Read order ID from URL ──
+// URL format: nota.html?order=FIRESTORE_DOC_ID
+const params  = new URLSearchParams(window.location.search);
+const orderId = params.get("order");  // Firestore document ID
+
+// ── Helpers ──
+const fmt    = n  => "Rp\u00a0" + Number(n).toLocaleString("id-ID");
+const fmtDt  = ts => {
+  if (!ts) return "-";
+  const d = ts.toDate ? ts.toDate() : new Date(ts);
+  return d.toLocaleDateString("id-ID", {day:"2-digit",month:"long",year:"numeric"}) +
+         " · " + d.toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"});
+};
+
+// ── Render receipt ──
+function render(order, settings) {
+  const s = settings || {};
+  const storeName    = s.storeName    || "Sawah Senja";
+  const storeAddress = s.storeAddress || "";
+  const storePhone   = s.storePhone   || "";
+  const logoUrl      = s.logoUrl      || "";
+  const footer       = s.receiptFooter|| "Terima kasih sudah makan di Sawah Senja 🌾";
+
+  const subtotal  = order.subtotal  || 0;
+  const fee       = order.serviceFee|| 0;
+  const total     = order.total     || 0;
+  const feeLabel  = order.serviceFeeLabel || s.serviceFeeLabel || "Service fee";
+  const paid      = order.cashPaid  || 0;
+  const change    = order.cashChange|| 0;
+  const isPaid    = order.paymentStatus === "PAID";
+  const isCash    = (order.paymentMethod||"").toLowerCase() === "cash";
+
+  // Items table
+  const itemRows = (order.items||[]).map(i => `
+    <tr class="item-row">
+      <td class="item-name">${i.name}${i.notes?`<br/><span class="item-note">${i.notes}</span>`:""}</td>
+      <td class="item-qty">${i.qty}</td>
+      <td class="item-unit">${fmt(i.price)}</td>
+      <td class="item-total">${fmt((i.price||0)*(i.qty||0))}</td>
+    </tr>`).join("");
+
+  document.getElementById("receipt-root").innerHTML = `
+  <div class="receipt">
+
+    <!-- ── HEADER ── -->
+    <div class="receipt-header">
+      ${logoUrl
+        ? `<img src="${logoUrl}" alt="${storeName}" class="receipt-logo" onerror="this.style.display='none'"/>`
+        : `<div class="receipt-logo-fallback">🌾</div>`}
+      <div class="receipt-store-name">${storeName}</div>
+      ${storeAddress ? `<div class="receipt-store-meta">${storeAddress}</div>` : ""}
+      ${storePhone   ? `<div class="receipt-store-meta">📞 ${storePhone}</div>` : ""}
+    </div>
+
+    <!-- ── STATUS BANNER ── -->
+    <div class="receipt-status ${isPaid?"receipt-status--paid":"receipt-status--unpaid"}">
+      <div class="receipt-status__icon">${isPaid?"✓":"⏳"}</div>
+      <div>
+        <div class="receipt-status__title">${isPaid?"PEMBAYARAN LUNAS":"BELUM LUNAS"}</div>
+        <div class="receipt-status__sub">${order.paymentMethod||"-"}</div>
+      </div>
+    </div>
+
+    <!-- ── ORDER META ── -->
+    <div class="receipt-section">
+      <div class="receipt-meta-grid">
+        <div class="meta-cell">
+          <div class="meta-label">No. Order</div>
+          <div class="meta-value mono">${order.orderId||"-"}</div>
+        </div>
+        <div class="meta-cell">
+          <div class="meta-label">Area</div>
+          <div class="meta-value">${order.areaCode||"-"}</div>
+        </div>
+        <div class="meta-cell">
+          <div class="meta-label">Nama</div>
+          <div class="meta-value">${order.customerName||"-"}</div>
+        </div>
+        <div class="meta-cell">
+          <div class="meta-label">Waktu</div>
+          <div class="meta-value small">${fmtDt(order.paidAt||order.updatedAt||order.createdAt)}</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── ITEMS TABLE ── -->
+    <div class="receipt-section">
+      <div class="section-label">🧾 Pesanan</div>
+      <table class="items-table">
+        <thead>
+          <tr>
+            <th class="th-name">Item</th>
+            <th class="th-qty">Qty</th>
+            <th class="th-unit">Harga</th>
+            <th class="th-total">Total</th>
+          </tr>
+        </thead>
+        <tbody>${itemRows}</tbody>
+      </table>
+    </div>
+
+    <!-- ── PRICING SUMMARY ── -->
+    <div class="receipt-section">
+      <div class="pricing-rows">
+        <div class="pricing-row">
+          <span>Subtotal</span>
+          <span class="mono">${fmt(subtotal)}</span>
+        </div>
+        ${fee>0?`
+        <div class="pricing-row">
+          <span>${feeLabel}</span>
+          <span class="mono">${fmt(fee)}</span>
+        </div>`:""}
+        <div class="pricing-row pricing-row--total">
+          <span>TOTAL</span>
+          <span class="mono">${fmt(total)}</span>
+        </div>
+        ${isCash&&paid>0?`
+        <div class="pricing-row pricing-row--cash">
+          <span>Dibayar</span>
+          <span class="mono">${fmt(paid)}</span>
+        </div>
+        <div class="pricing-row pricing-row--change">
+          <span>Kembalian</span>
+          <span class="mono">${fmt(change)}</span>
+        </div>`:""}
+      </div>
+    </div>
+
+    <!-- ── QR / ORDER ID VISUAL ── -->
+    <div class="receipt-section receipt-section--center">
+      <div class="receipt-order-badge">
+        <div class="receipt-order-badge__label">Nomor Order</div>
+        <div class="receipt-order-badge__id">${order.orderId||"-"}</div>
+        <div class="receipt-order-badge__hint">Tunjukkan ke kasir jika diperlukan</div>
+      </div>
+    </div>
+
+    <!-- ── FOOTER ── -->
+    <div class="receipt-footer">
+      <div class="receipt-footer__divider"></div>
+      <div class="receipt-footer__text">${footer}</div>
+      <div class="receipt-footer__brand">${storeName}</div>
+    </div>
+
+    <!-- ── PRINT BUTTON (hidden on print) ── -->
+    <div class="receipt-actions no-print">
+      <button onclick="window.print()" class="btn-print">
+        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/></svg>
+        Cetak Nota
+      </button>
+      <button onclick="shareReceipt()" class="btn-share">
+        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z"/></svg>
+        Bagikan
+      </button>
+    </div>
+
+  </div>`;
+
+  // Update page title
+  document.title = `Nota ${order.orderId||""} - ${storeName}`;
+
+  // Show receipt, hide loading
+  document.getElementById("loading-state").style.display  = "none";
+  document.getElementById("receipt-root").style.display   = "block";
+}
+
+function shareReceipt() {
+  if (navigator.share) {
+    navigator.share({ title: "Nota Sawah Senja", url: window.location.href }).catch(()=>{});
+  } else {
+    navigator.clipboard.writeText(window.location.href).then(()=>{
+      alert("Link nota berhasil disalin!");
+    });
+  }
+}
+window.shareReceipt = shareReceipt;
+
+// ── Load data ──
+async function loadReceipt() {
+  if (!orderId) {
+    showError("Link nota tidak valid. Parameter 'order' tidak ditemukan.");
+    return;
+  }
+
+  try {
+    // Load order
+    const orderRef = doc(db, "orders", orderId);
+    const orderSnap = await getDoc(orderRef);
+
+    if (!orderSnap.exists()) {
+      showError(`Order dengan ID "${orderId}" tidak ditemukan.`);
+      return;
+    }
+
+    const order = { id: orderSnap.id, ...orderSnap.data() };
+
+    // Load settings
+    let settings = {};
+    try {
+      const settingsSnap = await getDoc(doc(db, "settings", "general"));
+      if (settingsSnap.exists()) settings = settingsSnap.data();
+    } catch(e) { /* settings optional */ }
+
+    render(order, settings);
+
+    // Live-update if order status changes (e.g. payment confirmed while nota open)
+    onSnapshot(orderRef, snap => {
+      if (snap.exists()) render({ id: snap.id, ...snap.data() }, settings);
+    });
+
+  } catch(e) {
+    console.error(e);
+    showError("Gagal memuat nota: " + e.message);
+  }
+}
+
+function showError(msg) {
+  document.getElementById("loading-state").style.display = "none";
+  document.getElementById("error-state").style.display  = "flex";
+  document.getElementById("error-msg").textContent = msg;
+}
+
+document.addEventListener("DOMContentLoaded", loadReceipt);
+</script>
+
+<style>
+/* ── TOKENS ── */
+:root {
+  --font:      'Plus Jakarta Sans', sans-serif;
+  --font-mono: 'DM Mono', monospace;
+  --bg:        #f0f2f5;
+  --surface:   #ffffff;
+  --border:    #e8eaed;
+  --text:      #1a1a2e;
+  --text2:     #555770;
+  --text3:     #9397a8;
+  --orange:    #e8610a;
+  --orange2:   #f97316;
+  --green:     #059669;
+  --green-bg:  #ecfdf5;
+  --green-bdr: #6ee7b7;
+  --red:       #dc2626;
+  --red-bg:    #fef2f2;
+  --red-bdr:   #fca5a5;
+}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 24px 16px 48px;
+}
+.mono { font-family: var(--font-mono); }
+
+/* ── LOADING / ERROR ── */
+#loading-state, #error-state {
+  min-height: 60dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 12px;
+}
+#error-state { display: none; }
+.loading-spinner {
+  width: 40px; height: 40px;
+  border: 3px solid #e2e8f0;
+  border-top-color: var(--orange);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.loading-text { font-size: 14px; color: var(--text3); }
+.error-icon { font-size: 48px; }
+.error-title { font-size: 18px; font-weight: 700; color: var(--text); }
+#error-msg { font-size: 13px; color: var(--text3); max-width: 300px; }
+
+/* ── RECEIPT WRAPPER ── */
+#receipt-root { display: none; width: 100%; max-width: 420px; }
+
+.receipt {
+  background: var(--surface);
+  border-radius: 20px;
+  overflow: hidden;
+  box-shadow: 0 4px 32px rgba(0,0,0,0.10), 0 1px 4px rgba(0,0,0,0.06);
+}
+
+/* ── HEADER ── */
+.receipt-header {
+  background: linear-gradient(145deg, #1a1a2e 0%, #2d2d4a 100%);
+  padding: 32px 24px 24px;
+  text-align: center;
+  position: relative;
+}
+.receipt-header::after {
+  content: "";
+  position: absolute;
+  bottom: -1px; left: 0; right: 0;
+  height: 20px;
+  background: var(--surface);
+  border-radius: 20px 20px 0 0;
+}
+.receipt-logo {
+  width: 64px; height: 64px;
+  object-fit: contain;
+  border-radius: 14px;
+  border: 2px solid rgba(255,255,255,0.2);
+  margin: 0 auto 12px;
+  display: block;
+  background: rgba(255,255,255,0.1);
+}
+.receipt-logo-fallback {
+  font-size: 40px;
+  margin-bottom: 12px;
+}
+.receipt-store-name {
+  font-size: 22px;
+  font-weight: 800;
+  color: #fff;
+  letter-spacing: -0.01em;
+}
+.receipt-store-meta {
+  font-size: 12px;
+  color: rgba(255,255,255,0.6);
+  margin-top: 3px;
+}
+
+/* ── STATUS BANNER ── */
+.receipt-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 24px;
+  border-bottom: 1px solid var(--border);
+}
+.receipt-status--paid   { background: var(--green-bg); }
+.receipt-status--unpaid { background: var(--red-bg); }
+.receipt-status__icon {
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 16px; font-weight: 800; flex-shrink: 0;
+}
+.receipt-status--paid   .receipt-status__icon { background: var(--green); color: #fff; }
+.receipt-status--unpaid .receipt-status__icon { background: var(--red);   color: #fff; }
+.receipt-status__title {
+  font-size: 14px; font-weight: 800;
+}
+.receipt-status--paid   .receipt-status__title { color: var(--green); }
+.receipt-status--unpaid .receipt-status__title { color: var(--red); }
+.receipt-status__sub {
+  font-size: 12px; color: var(--text3); margin-top: 1px;
+}
+
+/* ── SECTIONS ── */
+.receipt-section {
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--border);
+}
+.receipt-section--center { text-align: center; }
+.section-label {
+  font-size: 11px; font-weight: 700; color: var(--text3);
+  text-transform: uppercase; letter-spacing: 0.08em;
+  margin-bottom: 10px;
+}
+
+/* ── META GRID ── */
+.receipt-meta-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.meta-cell {
+  background: #f8f9fb;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+.meta-label { font-size: 10px; font-weight: 600; color: var(--text3); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 3px; }
+.meta-value { font-size: 14px; font-weight: 700; color: var(--text); }
+.meta-value.mono { font-family: var(--font-mono); }
+.meta-value.small { font-size: 12px; font-weight: 500; }
+
+/* ── ITEMS TABLE ── */
+.items-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.items-table thead tr {
+  border-bottom: 2px solid var(--border);
+}
+.items-table th {
+  padding: 6px 4px;
+  font-size: 10px; font-weight: 700; color: var(--text3);
+  text-transform: uppercase; letter-spacing: 0.06em;
+  text-align: left;
+}
+.th-qty, .th-unit, .th-total { text-align: right; }
+.item-row { border-bottom: 1px solid #f1f3f6; }
+.item-row:last-child { border-bottom: none; }
+.item-name { padding: 8px 4px 8px 0; font-weight: 600; color: var(--text); }
+.item-note { font-size: 11px; color: var(--text3); font-style: italic; font-weight: 400; }
+.item-qty  { padding: 8px 4px; text-align: right; color: var(--text2); }
+.item-unit { padding: 8px 4px; text-align: right; color: var(--text2); font-family: var(--font-mono); font-size: 12px; }
+.item-total{ padding: 8px 0 8px 4px; text-align: right; font-family: var(--font-mono); font-weight: 600; color: var(--text); }
+
+/* ── PRICING ── */
+.pricing-rows { display: flex; flex-direction: column; gap: 6px; }
+.pricing-row {
+  display: flex; justify-content: space-between; align-items: baseline;
+  font-size: 14px; color: var(--text2);
+}
+.pricing-row--total {
+  font-size: 20px; font-weight: 900; color: var(--text);
+  border-top: 2px solid var(--border);
+  padding-top: 10px; margin-top: 4px;
+}
+.pricing-row--cash   { color: var(--text2); }
+.pricing-row--change { font-weight: 800; color: var(--green); font-size: 15px; }
+
+/* ── ORDER BADGE ── */
+.receipt-order-badge {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  background: linear-gradient(135deg, #fff7ed, #fff3e0);
+  border: 2px dashed #fed7aa;
+  border-radius: 16px;
+  padding: 16px 32px;
+}
+.receipt-order-badge__label {
+  font-size: 10px; font-weight: 700; color: var(--text3);
+  text-transform: uppercase; letter-spacing: 0.08em;
+}
+.receipt-order-badge__id {
+  font-family: var(--font-mono);
+  font-size: 28px; font-weight: 800;
+  color: var(--orange);
+  letter-spacing: 0.05em;
+}
+.receipt-order-badge__hint {
+  font-size: 11px; color: var(--text3);
+}
+
+/* ── FOOTER ── */
+.receipt-footer {
+  padding: 20px 24px 24px;
+  text-align: center;
+}
+.receipt-footer__divider {
+  width: 40px; height: 2px;
+  background: var(--border);
+  border-radius: 1px;
+  margin: 0 auto 14px;
+}
+.receipt-footer__text {
+  font-size: 13px; color: var(--text2); line-height: 1.5;
+  margin-bottom: 6px;
+}
+.receipt-footer__brand {
+  font-size: 12px; font-weight: 700; color: var(--text3);
+  letter-spacing: 0.04em;
+}
+
+/* ── ACTION BUTTONS ── */
+.receipt-actions {
+  display: flex;
+  gap: 10px;
+  padding: 0 24px 24px;
+}
+.btn-print, .btn-share {
+  flex: 1;
+  display: flex; align-items: center; justify-content: center; gap: 7px;
+  padding: 12px;
+  border-radius: 12px;
+  font-family: var(--font);
+  font-size: 13px; font-weight: 700;
+  cursor: pointer; border: none;
+  transition: all 0.15s;
+}
+.btn-print {
+  background: var(--text);
+  color: #fff;
+}
+.btn-print:hover { background: #2d2d4a; }
+.btn-print:active { transform: scale(0.97); }
+.btn-share {
+  background: #f0f2f5;
+  color: var(--text2);
+  border: 1.5px solid var(--border);
+}
+.btn-share:hover { background: var(--border); }
+.btn-share:active { transform: scale(0.97); }
+
+/* ── PRINT STYLES ── */
+@media print {
+  body { background: #fff; padding: 0; }
+  .receipt { box-shadow: none; border-radius: 0; }
+  .no-print { display: none !important; }
+  .receipt-header { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .receipt-status { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .receipt-order-badge { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}
+</style>
+</head>
+<body>
+
+<!-- Loading -->
+<div id="loading-state">
+  <div class="loading-spinner"></div>
+  <div class="loading-text">Memuat nota…</div>
+</div>
+
+<!-- Error -->
+<div id="error-state">
+  <div class="error-icon">⚠️</div>
+  <div class="error-title">Nota tidak ditemukan</div>
+  <div id="error-msg">Link tidak valid atau nota sudah dihapus.</div>
+</div>
+
+<!-- Receipt -->
+<div id="receipt-root"></div>
+
+</body>
+</html>
