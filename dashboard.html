@@ -39,11 +39,14 @@ let currentUser=null, domReady=false, pendingAuthUser=undefined;
 
 // Settings loaded from Firestore "settings/general"
 let appSettings = {
-  promoEnabled: true,
-  promoText: "Gratis Es Teh untuk setiap Paket Senja",
+  promoEnabled:      true,
+  promoText:         "Gratis Es Teh untuk setiap Paket Senja",
   serviceFeeEnabled: true,
-  serviceFeeAmount: 2000,
-  serviceFeeLabel: "Service fee",
+  serviceFeeType:    "nominal",   // "nominal" | "percent"
+  serviceFeeAmount:  2000,
+  serviceFeePercent: 10,
+  serviceFeeLabel:   "Service fee",
+  logoUrl:           "",          // URL gambar logo header dashboard
 };
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -125,7 +128,25 @@ function showApp() {
   const el=document.getElementById("hdr-user-email");
   if(el&&currentUser) el.textContent=currentUser.email;
   startClock();
+  // Apply logo if already loaded
+  if(appSettings.logoUrl) updateHeaderLogo(appSettings.logoUrl);
 }
+
+function updateHeaderLogo(url) {
+  const img = document.getElementById("hdr-logo-img");
+  const icon= document.getElementById("hdr-logo-icon");
+  if (!img || !icon) return;
+  if (url) {
+    img.src = url;
+    img.style.display = "block";
+    icon.style.display = "none";
+    img.onerror = () => { img.style.display="none"; icon.style.display="flex"; };
+  } else {
+    img.style.display = "none";
+    icon.style.display = "flex";
+  }
+}
+window.updateHeaderLogo = updateHeaderLogo;
 
 // ── Listeners ─────────────────────────────────────────────────
 function startListeners() { startOrdersListener(); startMenuListener(); startSettingsListener(); }
@@ -163,14 +184,19 @@ function startSettingsListener() {
     if(snap.exists()) {
       const d=snap.data();
       appSettings={
-        promoEnabled:    d.promoEnabled    ?? true,
-        promoText:       d.promoText       ?? "Gratis Es Teh untuk setiap Paket Senja",
+        promoEnabled:      d.promoEnabled      ?? true,
+        promoText:         d.promoText         ?? "Gratis Es Teh untuk setiap Paket Senja",
         serviceFeeEnabled: d.serviceFeeEnabled ?? true,
-        serviceFeeAmount:  Number(d.serviceFeeAmount) || 2000,
-        serviceFeeLabel:   d.serviceFeeLabel  ?? "Service fee",
+        serviceFeeType:    d.serviceFeeType    || "nominal",
+        serviceFeeAmount:  Number(d.serviceFeeAmount)  || 2000,
+        serviceFeePercent: Number(d.serviceFeePercent) || 10,
+        serviceFeeLabel:   d.serviceFeeLabel   ?? "Service fee",
+        logoUrl:           d.logoUrl           || "",
       };
     }
     if(activeTab==="settings") renderSettingsPanel();
+    // Apply logo to header whenever settings update
+    if(appSettings.logoUrl) updateHeaderLogo(appSettings.logoUrl);
   }, err=>{ console.error("Settings listener:",err); });
 }
 
@@ -178,12 +204,16 @@ async function saveSettings() {
   const btn=document.getElementById("btn-save-settings");
   if(btn){btn.disabled=true;btn.textContent="Menyimpan…";}
   try {
+    const feeType = document.getElementById("sf-fee-type")?.value || "nominal";
     const payload={
       promoEnabled:      document.getElementById("sf-promo-enabled").checked,
       promoText:         document.getElementById("sf-promo-text").value.trim(),
       serviceFeeEnabled: document.getElementById("sf-fee-enabled").checked,
-      serviceFeeAmount:  parseInt(document.getElementById("sf-fee-amount").value)||0,
+      serviceFeeType:    feeType,
+      serviceFeeAmount:  parseInt(document.getElementById("sf-fee-amount")?.value)||0,
+      serviceFeePercent: parseFloat(document.getElementById("sf-fee-percent")?.value)||0,
       serviceFeeLabel:   document.getElementById("sf-fee-label").value.trim()||"Service fee",
+      logoUrl:           document.getElementById("sf-logo-url")?.value.trim()||"",
       updatedAt:         serverTimestamp(),
     };
     await setDoc(doc(db,"settings","general"), payload, {merge:true});
@@ -474,12 +504,51 @@ function buildMenuRow(item) {
 }
 
 // ── Render: Settings Panel ────────────────────────────────────
+function calcFeeAmount(subtotal) {
+  if (!appSettings.serviceFeeEnabled) return 0;
+  if (appSettings.serviceFeeType === "percent") {
+    return Math.round(subtotal * (appSettings.serviceFeePercent || 0) / 100);
+  }
+  return appSettings.serviceFeeAmount || 0;
+}
+
 function renderSettingsPanel() {
   const panel=document.getElementById("settings-panel");
   if(!panel) return;
   const s=appSettings;
+  const isPercent = s.serviceFeeType === "percent";
+  const sampleSubtotal = 30000;
+  const sampleFee = s.serviceFeeEnabled
+    ? (isPercent ? Math.round(sampleSubtotal * s.serviceFeePercent / 100) : s.serviceFeeAmount)
+    : 0;
+
   panel.innerHTML=`
   <div class="settings-grid">
+
+    <!-- Logo Header -->
+    <div class="settings-card sm:col-span-2">
+      <div class="settings-card__title">🖼️ Logo Header</div>
+      <div class="settings-card__desc">Gambar logo yang muncul di header dashboard dan halaman order customer. Paste URL gambar dari internet.</div>
+      <div class="sf-field mt-4">
+        <label class="sf-label">URL Gambar Logo</label>
+        <input id="sf-logo-url" type="url" value="${s.logoUrl||""}" placeholder="https://..." class="sf-input" oninput="updateLogoPreview(this.value)"/>
+      </div>
+      <div class="mt-3 flex items-center gap-4">
+        <div id="sf-logo-preview-wrap" class="flex items-center justify-center rounded-xl border border-slate-200 bg-slate-50 overflow-hidden flex-shrink-0" style="width:80px;height:80px;">
+          ${s.logoUrl
+            ? `<img id="sf-logo-img" src="${s.logoUrl}" style="width:100%;height:100%;object-fit:contain;" onerror="this.style.display='none';document.getElementById('sf-logo-ph').style.display='flex'"/>
+               <div id="sf-logo-ph" style="display:none;align-items:center;justify-content:center;width:100%;height:100%;font-size:28px;">🌾</div>`
+            : `<div id="sf-logo-ph" style="display:flex;align-items:center;justify-content:center;width:100%;height:100%;font-size:28px;">🌾</div>
+               <img id="sf-logo-img" src="" style="display:none;width:100%;height:100%;object-fit:contain;"/>`
+          }
+        </div>
+        <div class="text-xs text-slate-400 leading-relaxed">
+          Logo ditampilkan di pojok kiri header.<br/>
+          Rekomendasi: gambar persegi atau landscape,<br/>
+          format PNG/JPG/WebP dengan background transparan.
+        </div>
+      </div>
+    </div>
 
     <!-- Promo Banner -->
     <div class="settings-card">
@@ -508,82 +577,151 @@ function renderSettingsPanel() {
     <!-- Service Fee -->
     <div class="settings-card">
       <div class="settings-card__title">💰 Biaya Tambahan</div>
-      <div class="settings-card__desc">Service fee atau PPN yang ditambahkan ke setiap transaksi customer.</div>
+      <div class="settings-card__desc">Service fee atau PPN. Bisa nominal tetap atau persentase dari subtotal.</div>
+
       <div class="sf-field sf-field--row mt-4">
-        <label class="sf-label">Aktifkan Biaya Tambahan</label>
+        <label class="sf-label">Aktifkan</label>
         <label class="toggle-switch">
-          <input type="checkbox" id="sf-fee-enabled" ${s.serviceFeeEnabled?"checked":""} onchange="toggleFeePreview()"/>
+          <input type="checkbox" id="sf-fee-enabled" ${s.serviceFeeEnabled?"checked":""} onchange="onFeeToggle()"/>
           <span class="toggle-track"></span>
         </label>
       </div>
-      <div class="grid grid-cols-2 gap-3 mt-3">
+
+      <div id="sf-fee-fields" class="mt-3 space-y-3 ${s.serviceFeeEnabled?"":"opacity-40 pointer-events-none"}">
         <div class="sf-field">
           <label class="sf-label">Label</label>
-          <input id="sf-fee-label" type="text" value="${s.serviceFeeLabel}" placeholder="Service fee / PPN" class="sf-input" maxlength="30"/>
+          <input id="sf-fee-label" type="text" value="${s.serviceFeeLabel}" placeholder="Service fee / PPN" class="sf-input" maxlength="30" oninput="updateFeePreview()"/>
         </div>
+
+        <!-- Fee Type Selector -->
         <div class="sf-field">
+          <label class="sf-label">Tipe Biaya</label>
+          <div class="flex gap-2">
+            <label class="fee-type-opt ${!isPercent?"fee-type-opt--active":""}">
+              <input type="radio" name="sf-fee-type" id="sf-fee-type" value="nominal" ${!isPercent?"checked":""} onchange="onFeeTypeChange()" style="display:none"/>
+              <span>Rp Nominal</span>
+            </label>
+            <label class="fee-type-opt ${isPercent?"fee-type-opt--active":""}">
+              <input type="radio" name="sf-fee-type" value="percent" ${isPercent?"checked":""} onchange="onFeeTypeChange()" style="display:none"/>
+              <span>% Persentase</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Nominal input -->
+        <div id="sf-nominal-wrap" class="sf-field ${isPercent?"hidden":""}">
           <label class="sf-label">Nominal (Rp)</label>
-          <input id="sf-fee-amount" type="number" value="${s.serviceFeeAmount}" placeholder="2000" min="0" class="sf-input"/>
+          <input id="sf-fee-amount" type="number" value="${s.serviceFeeAmount}" placeholder="2000" min="0" class="sf-input" oninput="updateFeePreview()"/>
         </div>
-      </div>
-      <div id="fee-preview" class="mt-3 rounded-xl p-3 bg-slate-50 border border-slate-200 ${s.serviceFeeEnabled?"":"opacity-40"}">
-        <div class="text-xs text-slate-500 mb-1.5 font-semibold uppercase tracking-wide">Preview di checkout customer:</div>
-        <div class="flex justify-between text-sm text-slate-600"><span>Subtotal</span><span>Rp 30.000</span></div>
-        <div id="fee-preview-row" class="flex justify-between text-sm text-slate-600 ${s.serviceFeeEnabled?"":"hidden"}">
-          <span id="fee-preview-label">${s.serviceFeeLabel}</span>
-          <span id="fee-preview-amount">${fmt(s.serviceFeeAmount)}</span>
+
+        <!-- Percent input -->
+        <div id="sf-percent-wrap" class="sf-field ${isPercent?"":"hidden"}">
+          <label class="sf-label">Persentase (%)</label>
+          <div class="relative">
+            <input id="sf-fee-percent" type="number" value="${s.serviceFeePercent}" placeholder="10" min="0" max="100" step="0.5" class="sf-input" style="padding-right:36px" oninput="updateFeePreview()"/>
+            <span style="position:absolute;right:12px;top:50%;transform:translateY(-50%);font-size:13px;color:#94a3b8;font-weight:700;">%</span>
+          </div>
         </div>
-        <div class="flex justify-between text-sm font-bold text-slate-900 border-t border-slate-200 mt-1.5 pt-1.5">
-          <span>Total</span>
-          <span id="fee-preview-total">${fmt(30000+(s.serviceFeeEnabled?s.serviceFeeAmount:0))}</span>
+
+        <!-- Live preview -->
+        <div id="fee-preview" class="rounded-xl p-3 bg-slate-50 border border-slate-200">
+          <div class="text-xs text-slate-500 mb-2 font-semibold uppercase tracking-wide">Preview checkout (contoh subtotal Rp 30.000):</div>
+          <div class="flex justify-between text-sm text-slate-600"><span>Subtotal</span><span>Rp 30.000</span></div>
+          <div id="fee-preview-row" class="flex justify-between text-sm text-slate-600 ${s.serviceFeeEnabled?"":"hidden"}">
+            <span id="fee-preview-label">${s.serviceFeeLabel}</span>
+            <span id="fee-preview-amount">${fmt(sampleFee)}</span>
+          </div>
+          <div class="flex justify-between text-sm font-bold text-slate-900 border-t border-slate-200 mt-1.5 pt-1.5">
+            <span>Total</span>
+            <span id="fee-preview-total">${fmt(sampleSubtotal + sampleFee)}</span>
+          </div>
         </div>
       </div>
     </div>
 
   </div>
 
-  <div class="mt-5">
+  <div class="mt-5 flex items-center gap-3">
     <button id="btn-save-settings" onclick="saveSettings()" class="btn-primary">
       Simpan Pengaturan
     </button>
+    <span id="settings-saved-hint" class="text-xs text-slate-400 hidden">✓ Tersimpan</span>
   </div>`;
 
-  // Bind live preview
-  window.updatePromoPreview=()=>{
-    const txt=document.getElementById("sf-promo-text")?.value||"-";
-    const el=document.getElementById("promo-preview-text");
-    if(el) el.textContent=txt;
-  };
-  window.togglePromoPreview=()=>{
-    const enabled=document.getElementById("sf-promo-enabled")?.checked;
-    document.getElementById("promo-preview")?.classList.toggle("opacity-40",!enabled);
-  };
-  window.toggleFeePreview=()=>{
-    const enabled=document.getElementById("sf-fee-enabled")?.checked;
-    document.getElementById("fee-preview")?.classList.toggle("opacity-40",!enabled);
-    document.getElementById("fee-preview-row")?.classList.toggle("hidden",!enabled);
-    const amt=parseInt(document.getElementById("sf-fee-amount")?.value)||0;
-    const tot=document.getElementById("fee-preview-total");
-    if(tot) tot.textContent=fmt(30000+(enabled?amt:0));
+  // ── Live preview functions ──────────────────────────────────
+  window.updateLogoPreview = (url) => {
+    const img = document.getElementById("sf-logo-img");
+    const ph  = document.getElementById("sf-logo-ph");
+    if (!img || !ph) return;
+    if (url.trim()) {
+      img.src = url.trim();
+      img.style.display = "block";
+      ph.style.display  = "none";
+      img.onerror = () => { img.style.display="none"; ph.style.display="flex"; };
+      // Also update header logo live
+      updateHeaderLogo(url.trim());
+    } else {
+      img.style.display = "none";
+      ph.style.display  = "flex";
+      updateHeaderLogo("");
+    }
   };
 
-  // bind fee amount live update
-  document.getElementById("sf-fee-amount")?.addEventListener("input",e=>{
-    const enabled=document.getElementById("sf-fee-enabled")?.checked;
-    const amt=parseInt(e.target.value)||0;
-    const lbl=document.getElementById("sf-fee-label")?.value||"Service fee";
-    const lblEl=document.getElementById("fee-preview-label");
-    const amtEl=document.getElementById("fee-preview-amount");
-    const totEl=document.getElementById("fee-preview-total");
-    if(lblEl) lblEl.textContent=lbl;
-    if(amtEl) amtEl.textContent=fmt(amt);
-    if(totEl) totEl.textContent=fmt(30000+(enabled?amt:0));
-  });
-  document.getElementById("sf-fee-label")?.addEventListener("input",e=>{
-    const lblEl=document.getElementById("fee-preview-label");
-    if(lblEl) lblEl.textContent=e.target.value||"Service fee";
-  });
-  window.saveSettings=saveSettings;
+  window.updatePromoPreview = () => {
+    const txt = document.getElementById("sf-promo-text")?.value || "-";
+    const el  = document.getElementById("promo-preview-text");
+    if (el) el.textContent = txt;
+  };
+
+  window.togglePromoPreview = () => {
+    const enabled = document.getElementById("sf-promo-enabled")?.checked;
+    document.getElementById("promo-preview")?.classList.toggle("opacity-40", !enabled);
+  };
+
+  window.onFeeToggle = () => {
+    const enabled = document.getElementById("sf-fee-enabled")?.checked;
+    const fields  = document.getElementById("sf-fee-fields");
+    if (fields) {
+      fields.classList.toggle("opacity-40", !enabled);
+      fields.classList.toggle("pointer-events-none", !enabled);
+    }
+    document.getElementById("fee-preview-row")?.classList.toggle("hidden", !enabled);
+    updateFeePreview();
+  };
+
+  window.onFeeTypeChange = () => {
+    const isPercent = document.querySelector("input[name='sf-fee-type']:checked")?.value === "percent";
+    document.getElementById("sf-nominal-wrap")?.classList.toggle("hidden",  isPercent);
+    document.getElementById("sf-percent-wrap")?.classList.toggle("hidden", !isPercent);
+    // Toggle active style on labels
+    document.querySelectorAll(".fee-type-opt").forEach(el => {
+      const inp = el.querySelector("input");
+      el.classList.toggle("fee-type-opt--active", inp?.checked);
+    });
+    updateFeePreview();
+  };
+
+  window.updateFeePreview = () => {
+    const enabled   = document.getElementById("sf-fee-enabled")?.checked;
+    const isPercent = document.querySelector("input[name='sf-fee-type']:checked")?.value === "percent";
+    const amt       = parseInt(document.getElementById("sf-fee-amount")?.value) || 0;
+    const pct       = parseFloat(document.getElementById("sf-fee-percent")?.value) || 0;
+    const lbl       = document.getElementById("sf-fee-label")?.value || "Service fee";
+    const SAMPLE    = 30000;
+
+    const feeVal = enabled ? (isPercent ? Math.round(SAMPLE * pct / 100) : amt) : 0;
+    const suffix = isPercent ? ` (${pct}%)` : "";
+
+    const lblEl = document.getElementById("fee-preview-label");
+    const amtEl = document.getElementById("fee-preview-amount");
+    const totEl = document.getElementById("fee-preview-total");
+    if (lblEl) lblEl.textContent = lbl + suffix;
+    if (amtEl) amtEl.textContent = fmt(feeVal);
+    if (totEl) totEl.textContent = fmt(SAMPLE + feeVal);
+    document.getElementById("fee-preview-row")?.classList.toggle("hidden", !enabled);
+  };
+
+  window.saveSettings = saveSettings;
 }
 
 // ── Menu CRUD ─────────────────────────────────────────────────
@@ -896,6 +1034,16 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);}
 .toggle-switch input:checked+.toggle-track{background:var(--orange);}
 .toggle-track::after{content:"";position:absolute;width:18px;height:18px;border-radius:50%;background:#fff;top:3px;left:3px;transition:0.2s;box-shadow:0 1px 3px rgba(0,0,0,0.2);}
 .toggle-switch input:checked+.toggle-track::after{transform:translateX(20px);}
+/* Fee type selector */
+.fee-type-opt{
+  display:inline-flex;align-items:center;padding:7px 14px;border-radius:8px;
+  font-size:12px;font-weight:700;cursor:pointer;transition:all 0.15s;
+  border:1.5px solid var(--border2);background:var(--bg);color:var(--text2);
+}
+.fee-type-opt--active{
+  background:var(--orange);border-color:var(--orange);color:#fff;
+}
+
 .btn-primary{background:linear-gradient(135deg,var(--orange),var(--orange2));color:#fff;font-family:var(--font);font-size:14px;font-weight:700;padding:11px 24px;border-radius:10px;border:none;cursor:pointer;transition:all 0.15s;box-shadow:0 3px 10px rgba(234,88,12,0.25);}
 .btn-primary:hover{transform:translateY(-1px);box-shadow:0 5px 15px rgba(234,88,12,0.3);}
 .btn-primary:active{transform:scale(0.97);}
@@ -948,7 +1096,13 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);}
       <div class="flex items-center justify-between gap-4">
         <div class="flex items-center gap-3 min-w-0">
           <div class="flex items-center gap-2.5">
-            <div class="header-logo"><svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg></div>
+            <!-- Logo: shows custom image if set, else default icon -->
+            <div class="header-logo" style="position:relative;overflow:hidden;">
+              <div id="hdr-logo-icon" style="display:flex;align-items:center;justify-content:center;width:100%;height:100%;">
+                <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+              </div>
+              <img id="hdr-logo-img" src="" alt="logo" style="display:none;position:absolute;inset:0;width:100%;height:100%;object-fit:contain;"/>
+            </div>
             <div><div class="font-bold text-slate-900 text-sm leading-none" style="font-family:var(--font)">Sawah Senja</div><div class="text-slate-400 text-[10px] mt-0.5">Dashboard</div></div>
           </div>
           <div id="realtime-clock" class="clock-pill hidden sm:block"></div>
