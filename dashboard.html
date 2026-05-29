@@ -529,76 +529,7 @@ function printKOT(order) {
     + '<div class="sep">' + SEP + '</div>'
     + '<div class="footer">*** SEGERA DIPROSES ***</div>'
     + '<div style="height:8mm"></div>'
-    + '
-<!-- ════ ERROR CONSOLE (debug tool) ════ -->
-<!-- Tombol mengambang di pojok kiri bawah -->
-<button onclick="__toggleErrorPanel__()"
-  style="position:fixed;bottom:16px;left:16px;z-index:99999;
-         width:44px;height:44px;border-radius:50%;border:none;cursor:pointer;
-         background:#dc2626;color:#fff;font-size:16px;
-         display:flex;align-items:center;justify-content:center;
-         box-shadow:0 4px 14px rgba(220,38,38,0.4);
-         font-family:monospace;"
-  title="Lihat Error Console">
-  🐛
-  <span id="__err_badge__"
-    style="display:none;position:absolute;top:-4px;right:-4px;
-           background:#fbbf24;color:#000;font-size:10px;font-weight:900;
-           width:18px;height:18px;border-radius:50%;
-           align-items:center;justify-content:center;">0</span>
-</button>
-
-<!-- Error Panel -->
-<div id="__err_panel__"
-  style="display:none;position:fixed;inset:0;z-index:99998;
-         background:rgba(0,0,0,0.85);flex-direction:column;">
-  <!-- Header -->
-  <div style="background:#0f172a;border-bottom:1px solid #334155;
-              padding:14px 16px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">
-    <div style="color:#f1f5f9;font-weight:800;font-size:15px;font-family:monospace;">
-      🐛 Error Console
-      <span id="__err_count_label__" style="font-size:12px;color:#94a3b8;font-weight:400;margin-left:8px;"></span>
-    </div>
-    <div style="display:flex;gap:8px;">
-      <button onclick="__copyAllErrors__()"
-        style="background:#3b82f6;color:#fff;border:none;border-radius:8px;
-               padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;">
-        📋 Copy Semua
-      </button>
-      <button onclick="window.__ERRORS__=[];__renderErrorPanel();__refreshErrorPanel();"
-        style="background:#475569;color:#fff;border:none;border-radius:8px;
-               padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;">
-        🗑 Clear
-      </button>
-      <button onclick="__toggleErrorPanel__()"
-        style="background:#1e293b;color:#94a3b8;border:1px solid #334155;border-radius:8px;
-               padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;">
-        ✕ Tutup
-      </button>
-    </div>
-  </div>
-  <!-- Info bar -->
-  <div style="background:#1e293b;padding:8px 16px;font-family:monospace;font-size:10px;color:#64748b;flex-shrink:0;">
-    URL: <span id="__err_url__"></span>
-  </div>
-  <!-- Body -->
-  <div id="__err_body__"
-    style="flex:1;overflow-y:auto;padding:16px;
-           font-family:monospace;background:#0f172a;">
-    <div style="text-align:center;padding:24px;color:#6b7280">Memuat…</div>
-  </div>
-</div>
-
-<script>
-// Set URL info when DOM ready
-document.addEventListener("DOMContentLoaded", function() {
-  const urlEl = document.getElementById("__err_url__");
-  if (urlEl) urlEl.textContent = window.location.href;
-  // Show badge if errors already captured during load
-  __refreshErrorPanel();
-});
-</script>
-</body></html>';
+    + '<' + '/body><' + '/html>';
 
   // Buka popup print
   var win = window.open("", "_blank", "width=300,height=500");
@@ -969,8 +900,15 @@ function buildCard(o) {
   let actionBtn="";
   if(o.orderStatus==="NEW")
     actionBtn=`<button data-action="start-cooking" data-id="${o.id}" class="act-btn act-btn--amber">▶ Mulai Masak</button>`;
+  else if(o.orderStatus==="COOKING")
+    actionBtn=`<button data-action="mark-ready" data-id="${o.id}" class="act-btn act-btn--green">✔ Tandai Siap</button>`;
+  else if(o.orderStatus==="READY")
+    actionBtn=`<button data-action="open-pos" data-id="${o.id}" class="act-btn act-btn--pos">
+      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/></svg>
+      Proses Bayar
+    </button>`;
 
-  // Tombol print KOT — tampil di NEW dan COOKING
+  // KOT button — tampil di NEW dan COOKING
   const kotBtn = (o.orderStatus==="NEW"||o.orderStatus==="COOKING")
     ? `<button data-action="print-kot" data-id="${o.id}"
          class="act-btn act-btn--kot" title="Print Kitchen Order Ticket ke printer thermal">
@@ -980,13 +918,6 @@ function buildCard(o) {
          KOT
        </button>`
     : "";
-  else if(o.orderStatus==="COOKING")
-    actionBtn=`<button data-action="mark-ready" data-id="${o.id}" class="act-btn act-btn--green">✔ Tandai Siap</button>`;
-  else if(o.orderStatus==="READY")
-    actionBtn=`<button data-action="open-pos" data-id="${o.id}" class="act-btn act-btn--pos">
-      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/></svg>
-      Proses Bayar
-    </button>`;
 
   // WA button — only for READY (notification), DONE has receipt button
   const waBtn = o.orderStatus==="READY"
