@@ -55,7 +55,7 @@ let appSettings = {
   storeName:         "Sawah Senja",
   storeAddress:      "",
   storePhone:        "",
-  receiptFooter:     "Terima kasih sudah makan di Sawah Senja 🌾",
+  receiptFooter:     "Terima kasih sudah berkunjung ke Sawah Senja 🌾",
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -248,7 +248,7 @@ function startSettingsListener() {
         storeName:         d.storeName         ||"Sawah Senja",
         storeAddress:      d.storeAddress      ||"",
         storePhone:        d.storePhone        ||"",
-        receiptFooter:     d.receiptFooter     ||"Terima kasih sudah makan di Sawah Senja 🌾",
+        receiptFooter:     d.receiptFooter     ||"Terima kasih sudah berkunjung ke Sawah Senja 🌾",
       };
     }
     if(activeTab==="settings") renderSettingsPanel();
@@ -274,7 +274,7 @@ async function saveSettings() {
       storeName:         document.getElementById("sf-store-name")?.value.trim()||"Sawah Senja",
       storeAddress:      document.getElementById("sf-store-address")?.value.trim()||"",
       storePhone:        document.getElementById("sf-store-phone")?.value.trim()||"",
-      receiptFooter:     document.getElementById("sf-receipt-footer")?.value.trim()||"Terima kasih sudah makan di Sawah Senja 🌾",
+      receiptFooter:     document.getElementById("sf-receipt-footer")?.value.trim()||"Terima kasih sudah berkunjung ke Sawah Senja 🌾",
       updatedAt:         serverTimestamp(),
     };
     await setDoc(doc(db,"settings","general"),payload,{merge:true});
@@ -524,7 +524,7 @@ function sendNotaLinkWA(order, notaUrl) {
 
   const msg = encodeURIComponent(
     `Halo *${order.customerName}* 👋\n\n` +
-    `Terima kasih sudah makan di *${store}*! 🌾\n\n` +
+    `Terima kasih sudah berkunjung ke *${store}*! 🌾\n\n` +
     `✅ Pembayaran *LUNAS* - ${order.paymentMethod}\n` +
     `🧾 No. Order: *${order.orderId}*\n` +
     `💳 Total: *${fmt(order.total||0)}*` +
@@ -816,7 +816,7 @@ function renderSettingsPanel() {
         <div class="sf-field"><label class="sf-label">Nama Toko</label><input id="sf-store-name" type="text" value="${s.storeName}" placeholder="Sawah Senja" class="sf-input" maxlength="50"/></div>
         <div class="sf-field"><label class="sf-label">Nomor Telepon</label><input id="sf-store-phone" type="tel" value="${s.storePhone}" placeholder="0812xxxxx" class="sf-input"/></div>
         <div class="sf-field sm:col-span-2"><label class="sf-label">Alamat</label><input id="sf-store-address" type="text" value="${s.storeAddress}" placeholder="Jl. Sawah No.1, Kota" class="sf-input" maxlength="100"/></div>
-        <div class="sf-field sm:col-span-2"><label class="sf-label">Pesan Penutup Nota</label><input id="sf-receipt-footer" type="text" value="${s.receiptFooter}" placeholder="Terima kasih sudah makan di Sawah Senja 🌾" class="sf-input" maxlength="120"/></div>
+        <div class="sf-field sm:col-span-2"><label class="sf-label">Pesan Penutup Nota</label><input id="sf-receipt-footer" type="text" value="${s.receiptFooter}" placeholder="Terima kasih sudah berkunjung ke Sawah Senja 🌾" class="sf-input" maxlength="120"/></div>
       </div>
     </div>
 
