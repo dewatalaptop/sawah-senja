@@ -55,7 +55,10 @@ let appSettings = {
   storeName:         "Sawah Senja",
   storeAddress:      "",
   storePhone:        "",
-  receiptFooter:     "Terima kasih sudah berkunjung ke Sawah Senja 🌾",
+  receiptFooter:     "Terima kasih telah makan di Sawah Senja. Sampai jumpa lagi! 🌾",
+  // Template pesan WhatsApp - bisa diedit via Pengaturan
+  waTplReady: "Halo Kak *{nama}* 👋\n\nPesanan Kakak dengan nomor *#{orderId}* sudah *siap diambil!* 🌾\n\n*Pesanan:*\n{items}\n\nMohon segera menuju pickup counter kami ya, Kak.\nMetode pembayaran: *{metodeBayar}*\n\nTerima kasih sudah menunggu, Kak! 🙏\n_{toko}_",
+  waTplNota:  "Halo Kak *{nama}* 👋\n\nTerima kasih telah makan di *{toko}*. Kami sangat senang bisa melayani Kakak hari ini! 🌾\n\n✅ Pembayaran *LUNAS* - {metodeBayar}\n🧾 No. Order: *#{orderId}*\n💳 Total: *{total}*{cashDetail}\n\n📋 *Nota lengkap Kakak tersedia di sini:*\n{notaUrl}\n\nSemoga berkenan dan sampai jumpa lagi, Kak! 🙏\n_{receiptFooter}_",
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -248,7 +251,9 @@ function startSettingsListener() {
         storeName:         d.storeName         ||"Sawah Senja",
         storeAddress:      d.storeAddress      ||"",
         storePhone:        d.storePhone        ||"",
-        receiptFooter:     d.receiptFooter     ||"Terima kasih sudah berkunjung ke Sawah Senja 🌾",
+        receiptFooter:     d.receiptFooter     ||"Terima kasih telah makan di Sawah Senja. Sampai jumpa lagi! 🌾",
+        waTplReady: d.waTplReady || "Halo Kak *{nama}* 👋\n\nPesanan Kakak dengan nomor *#{orderId}* sudah *siap diambil!* 🌾\n\n*Pesanan:*\n{items}\n\nMohon segera menuju pickup counter kami ya, Kak.\nMetode pembayaran: *{metodeBayar}*\n\nTerima kasih sudah menunggu, Kak! 🙏\n_{toko}_",
+        waTplNota:  d.waTplNota  || "Halo Kak *{nama}* 👋\n\nTerima kasih telah makan di *{toko}*. Kami sangat senang bisa melayani Kakak hari ini! 🌾\n\n✅ Pembayaran *LUNAS* - {metodeBayar}\n🧾 No. Order: *#{orderId}*\n💳 Total: *{total}*{cashDetail}\n\n📋 *Nota lengkap Kakak tersedia di sini:*\n{notaUrl}\n\nSemoga berkenan dan sampai jumpa lagi, Kak! 🙏\n_{receiptFooter}_",
       };
     }
     if(activeTab==="settings") renderSettingsPanel();
@@ -274,7 +279,9 @@ async function saveSettings() {
       storeName:         document.getElementById("sf-store-name")?.value.trim()||"Sawah Senja",
       storeAddress:      document.getElementById("sf-store-address")?.value.trim()||"",
       storePhone:        document.getElementById("sf-store-phone")?.value.trim()||"",
-      receiptFooter:     document.getElementById("sf-receipt-footer")?.value.trim()||"Terima kasih sudah berkunjung ke Sawah Senja 🌾",
+      receiptFooter:     document.getElementById("sf-receipt-footer")?.value.trim()||"Terima kasih telah makan di Sawah Senja. Sampai jumpa lagi! 🌾",
+      waTplReady:        document.getElementById("sf-wa-ready")?.value.trim()||appSettings.waTplReady,
+      waTplNota:         document.getElementById("sf-wa-nota")?.value.trim()||appSettings.waTplNota,
       updatedAt:         serverTimestamp(),
     };
     await setDoc(doc(db,"settings","general"),payload,{merge:true});
@@ -318,23 +325,40 @@ window.deleteAllDone=deleteAllDone;
 // ─────────────────────────────────────────────────────────────
 // WA - READY NOTIFICATION (bukan nota)
 // ─────────────────────────────────────────────────────────────
+// ── Template interpolation engine ──────────────────────────
+// Variabel yang tersedia: {nama} {orderId} {items} {metodeBayar} {toko}
+//                         {total} {notaUrl} {cashDetail} {receiptFooter}
+function interpolateWA(tpl, vars) {
+  return tpl
+    .replace(/\{nama\}/g,          vars.nama          || "")
+    .replace(/\{orderId\}/g,        vars.orderId        || "")
+    .replace(/\{items\}/g,          vars.items          || "")
+    .replace(/\{metodeBayar\}/g,    vars.metodeBayar    || "")
+    .replace(/\{toko\}/g,           vars.toko           || "")
+    .replace(/\{total\}/g,          vars.total          || "")
+    .replace(/\{notaUrl\}/g,        vars.notaUrl        || "")
+    .replace(/\{cashDetail\}/g,     vars.cashDetail     || "")
+    .replace(/\{receiptFooter\}/g,  vars.receiptFooter  || "");
+}
+
 function sendReadyWA(order) {
   const phone=String(order.customerWhatsapp).replace(/\D/g,"");
-  const fee=calcOrderFee(order);
-  const subtotal=order.subtotal||(order.total-(fee));
   const itemLines=(order.items||[]).map(i=>
     `  • ${i.qty}× ${i.name}${i.notes?` _(${i.notes})_`:""}`
   ).join("\n");
 
-  const msg=encodeURIComponent(
-    `Halo *${order.customerName}* 👋\n\n`+
-    `Pesanan *#${order.orderId}* sudah *siap diambil!* 🌾\n\n`+
-    `${itemLines}\n\n`+
-    `Silakan menuju pickup counter kami.\n`+
-    `Pembayaran: *${order.paymentMethod||"-"}*\n\n`+
-    `_${appSettings.storeName}_`
-  );
-  window.open(`https://wa.me/${phone}?text=${msg}`,"_blank");
+  const tpl = appSettings.waTplReady ||
+    "Halo Kak *{nama}* 👋\n\nPesanan *#{orderId}* sudah siap diambil! 🌾\n\n{items}\n\nSilakan ke pickup counter, Kak.\n_{toko}_";
+
+  const text = interpolateWA(tpl, {
+    nama:       order.customerName || "",
+    orderId:    order.orderId      || "",
+    items:      itemLines,
+    metodeBayar:order.paymentMethod|| "-",
+    toko:       appSettings.storeName || "Sawah Senja",
+  });
+
+  window.open(`https://wa.me/${phone}?text=${encodeURIComponent(text)}`,"_blank");
   updateDoc(doc(db,"orders",order.id),{whatsappSent:true}).catch(()=>{});
 }
 
@@ -376,10 +400,6 @@ function openPOS(order) {
   }
   document.getElementById("pos-total").textContent=fmt(total);
 
-  // Payment method pre-select
-  const pmSel=document.getElementById("pos-payment-method");
-  if(pmSel) pmSel.value=order.paymentMethod||"Cash";
-
   // Status badge
   const statusEl=document.getElementById("pos-payment-status");
   if(statusEl){
@@ -387,14 +407,20 @@ function openPOS(order) {
     statusEl.className="pos-pay-status "+(order.paymentStatus==="PAID"?"pos-pay-paid":order.paymentStatus==="PENDING"?"pos-pay-pending":"pos-pay-unpaid");
   }
 
-  // Reset cash section
-  const cashSec = document.getElementById("pos-cash-section");
-  if(cashSec) cashSec.style.display = "none";
+  // Reset cash inputs first
   const cashInput = document.getElementById("pos-cash-paid");
   if(cashInput) cashInput.value = "";
   const changeEl = document.getElementById("pos-cash-change");
   if(changeEl) changeEl.textContent = "Rp 0";
   changeEl?.classList.remove("pos-cash-change--ready");
+
+  // Payment method pre-select - THEN show/hide cash section based on method
+  const pmSel=document.getElementById("pos-payment-method");
+  if(pmSel) {
+    pmSel.value = order.paymentMethod || "Cash";
+    const cashSec = document.getElementById("pos-cash-section");
+    if(cashSec) cashSec.style.display = pmSel.value === "Cash" ? "block" : "none";
+  }
 
   // Pre-generate quick amount buttons based on order total
   genQuickAmounts(order.total||0);
@@ -516,24 +542,26 @@ function getNotaUrl(firestoreDocId) {
 // ─────────────────────────────────────────────────────────────
 function sendNotaLinkWA(order, notaUrl) {
   const phone   = String(order.customerWhatsapp).replace(/\D/g,"");
-  const store   = appSettings.storeName || "Sawah Senja";
   const isCash  = (order.paymentMethod||"").toLowerCase() === "cash";
-  const cashLine = isCash && order.cashPaid
+  const cashDetail = isCash && order.cashPaid
     ? `\n💵 Dibayar  : *${fmt(order.cashPaid)}*\n💰 Kembalian: *${fmt(order.cashChange||0)}*`
     : "";
 
-  const msg = encodeURIComponent(
-    `Halo *${order.customerName}* 👋\n\n` +
-    `Terima kasih sudah berkunjung ke *${store}*! 🌾\n\n` +
-    `✅ Pembayaran *LUNAS* - ${order.paymentMethod}\n` +
-    `🧾 No. Order: *${order.orderId}*\n` +
-    `💳 Total: *${fmt(order.total||0)}*` +
-    cashLine +
-    `\n\n📋 *Lihat nota lengkap Anda di sini:*\n${notaUrl}\n\n` +
-    `_${appSettings.receiptFooter||"Terima kasih telah berkunjung"}_`
-  );
+  const tpl = appSettings.waTplNota ||
+    "Halo Kak *{nama}* 👋\n\nTerima kasih telah makan di *{toko}*! 🌾\n\n✅ Pembayaran *LUNAS* - {metodeBayar}\n🧾 No. Order: *#{orderId}*\n💳 Total: *{total}*{cashDetail}\n\n📋 *Nota:*\n{notaUrl}\n\n_{receiptFooter}_";
 
-  window.open(`https://wa.me/${phone}?text=${msg}`, "_blank");
+  const text = interpolateWA(tpl, {
+    nama:          order.customerName || "",
+    orderId:       order.orderId      || "",
+    metodeBayar:   order.paymentMethod|| "-",
+    toko:          appSettings.storeName || "Sawah Senja",
+    total:         fmt(order.total||0),
+    cashDetail:    cashDetail,
+    notaUrl:       notaUrl || "",
+    receiptFooter: appSettings.receiptFooter || "Terima kasih telah berkunjung",
+  });
+
+  window.open(`https://wa.me/${phone}?text=${encodeURIComponent(text)}`, "_blank");
   updateDoc(doc(db,"orders",order.id),{receiptSent:true,notaUrl}).catch(()=>{});
 }
 
@@ -760,7 +788,7 @@ function buildMenuRow(item) {
   <div class="menu-row">
     <div class="menu-row__img">
       ${item.image
-        ?`<img src="${item.image}" style="width:100%;height:100%;object-fit:cover;display:block;" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"/>
+        ?`<img src="${item.image||''}" style="width:100%;height:100%;object-fit:cover;display:block;" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"/>
            <div style="display:none;align-items:center;justify-content:center;width:100%;height:100%;font-size:20px;color:#94a3b8;">🍽️</div>`
         :`<div style="display:flex;align-items:center;justify-content:center;width:100%;height:100%;font-size:20px;color:#94a3b8;">🍽️</div>`}
     </div>
@@ -816,7 +844,7 @@ function renderSettingsPanel() {
         <div class="sf-field"><label class="sf-label">Nama Toko</label><input id="sf-store-name" type="text" value="${s.storeName}" placeholder="Sawah Senja" class="sf-input" maxlength="50"/></div>
         <div class="sf-field"><label class="sf-label">Nomor Telepon</label><input id="sf-store-phone" type="tel" value="${s.storePhone}" placeholder="0812xxxxx" class="sf-input"/></div>
         <div class="sf-field sm:col-span-2"><label class="sf-label">Alamat</label><input id="sf-store-address" type="text" value="${s.storeAddress}" placeholder="Jl. Sawah No.1, Kota" class="sf-input" maxlength="100"/></div>
-        <div class="sf-field sm:col-span-2"><label class="sf-label">Pesan Penutup Nota</label><input id="sf-receipt-footer" type="text" value="${s.receiptFooter}" placeholder="Terima kasih sudah berkunjung ke Sawah Senja 🌾" class="sf-input" maxlength="120"/></div>
+        <div class="sf-field sm:col-span-2"><label class="sf-label">Pesan Penutup Nota</label><input id="sf-receipt-footer" type="text" value="${s.receiptFooter}" placeholder="Terima kasih sudah makan di Sawah Senja 🌾" class="sf-input" maxlength="120"/></div>
       </div>
     </div>
 
@@ -898,6 +926,58 @@ function renderSettingsPanel() {
       </div>
     </div>
 
+
+    <!-- WA Template Editor -->
+    <div class="settings-card sm:col-span-2">
+      <div class="settings-card__title">💬 Template Pesan WhatsApp</div>
+      <div class="settings-card__desc">Kustomisasi teks pesan yang dikirim ke customer. Gunakan variabel di bawah untuk menyisipkan data otomatis.</div>
+
+      <!-- Variables reference -->
+      <div class="wa-vars-box mt-3">
+        <div class="wa-vars-title">📌 Variabel yang tersedia:</div>
+        <div class="wa-vars-grid">
+          <code class="wa-var">{nama}</code><span>Nama customer</span>
+          <code class="wa-var">{orderId}</code><span>Nomor order</span>
+          <code class="wa-var">{items}</code><span>Daftar item pesanan</span>
+          <code class="wa-var">{metodeBayar}</code><span>Cash / QRIS / Transfer</span>
+          <code class="wa-var">{toko}</code><span>Nama toko</span>
+          <code class="wa-var">{total}</code><span>Total pembayaran</span>
+          <code class="wa-var">{notaUrl}</code><span>Link nota (template nota saja)</span>
+          <code class="wa-var">{cashDetail}</code><span>Dibayar & kembalian (Cash)</span>
+          <code class="wa-var">{receiptFooter}</code><span>Pesan penutup nota</span>
+        </div>
+        <div class="wa-vars-note">Tulis \n untuk baris baru. Gunakan *teks* untuk <strong>tebal</strong> dan _teks_ untuk <em>miring</em>.</div>
+      </div>
+
+      <!-- Template 1: Siap Diambil -->
+      <div class="sf-field mt-4">
+        <label class="sf-label">📢 Template: Pesanan Siap Diambil</label>
+        <div class="wa-tpl-wrap">
+          <textarea id="sf-wa-ready" rows="6" class="sf-input wa-tpl-input" oninput="updateWaPreview('ready')"
+            placeholder="Halo Kak *{nama}* ...">${s.waTplReady||""}</textarea>
+          <div class="wa-tpl-actions">
+            <button onclick="resetWaTpl('ready')" class="wa-tpl-btn">↺ Reset ke Default</button>
+            <button onclick="previewWaTpl('ready')" class="wa-tpl-btn wa-tpl-btn--preview">👁 Preview</button>
+          </div>
+        </div>
+        <div id="wa-preview-ready" class="wa-preview hidden"></div>
+      </div>
+
+      <!-- Template 2: Nota Pembayaran -->
+      <div class="sf-field mt-4">
+        <label class="sf-label">🧾 Template: Nota Pembayaran Lunas</label>
+        <div class="wa-tpl-wrap">
+          <textarea id="sf-wa-nota" rows="8" class="sf-input wa-tpl-input" oninput="updateWaPreview('nota')"
+            placeholder="Halo Kak *{nama}* ...">${s.waTplNota||""}</textarea>
+          <div class="wa-tpl-actions">
+            <button onclick="resetWaTpl('nota')" class="wa-tpl-btn">↺ Reset ke Default</button>
+            <button onclick="previewWaTpl('nota')" class="wa-tpl-btn wa-tpl-btn--preview">👁 Preview</button>
+          </div>
+        </div>
+        <div id="wa-preview-nota" class="wa-preview hidden"></div>
+      </div>
+    </div>
+
   </div>
 
   <div class="mt-5 flex items-center gap-3">
@@ -963,6 +1043,55 @@ function renderSettingsPanel() {
     document.getElementById("fee-preview-row")?.classList.toggle("hidden",!en);
   };
   window.saveSettings=saveSettings;
+
+  // ── WA Template helpers ──────────────────────────────────
+  const WA_DEFAULTS = {
+    ready: "Halo Kak *{nama}* 👋\n\nPesanan Kakak dengan nomor *#{orderId}* sudah *siap diambil!* 🌾\n\n*Pesanan:*\n{items}\n\nMohon segera menuju pickup counter kami ya, Kak.\nMetode pembayaran: *{metodeBayar}*\n\nTerima kasih sudah menunggu, Kak! 🙏\n_{toko}_",
+    nota:  "Halo Kak *{nama}* 👋\n\nTerima kasih telah makan di *{toko}*. Kami sangat senang bisa melayani Kakak hari ini! 🌾\n\n✅ Pembayaran *LUNAS* - {metodeBayar}\n🧾 No. Order: *#{orderId}*\n💳 Total: *{total}*{cashDetail}\n\n📋 *Nota lengkap Kakak tersedia di sini:*\n{notaUrl}\n\nSemoga berkenan dan sampai jumpa lagi, Kak! 🙏\n_{receiptFooter}_",
+  };
+
+  window.resetWaTpl = (type) => {
+    const el = document.getElementById(`sf-wa-${type}`);
+    if(el) { el.value = WA_DEFAULTS[type] || ""; updateWaPreview(type); }
+  };
+
+  window.previewWaTpl = (type) => {
+    const tpl = document.getElementById(`sf-wa-${type}`)?.value || "";
+    const previewEl = document.getElementById(`wa-preview-${type}`);
+    if(!previewEl) return;
+
+    // Sample data for preview
+    const sampleVars = {
+      nama:          "Budi Santoso",
+      orderId:       "GENERAL-001",
+      items:         "  • 2× Sate Taichan\n  • 1× Kopi Susu SS",
+      metodeBayar:   "Cash",
+      toko:          appSettings.storeName || "Sawah Senja",
+      total:         "Rp 46.000",
+      cashDetail:    "\n💵 Dibayar  : *Rp 50.000*\n💰 Kembalian: *Rp 4.000*",
+      notaUrl:       "https://dolansawah.my.id/nota.html?order=abc123",
+      receiptFooter: appSettings.receiptFooter || "Terima kasih telah makan di Sawah Senja",
+    };
+
+    // Apply interpolation
+    let preview = tpl;
+    Object.entries(sampleVars).forEach(([k,v]) => {
+      preview = preview.replace(new RegExp(`\{${k}\}`, "g"), v);
+    });
+    // Replace \n with actual newlines for display
+    preview = preview.replace(/\\n/g,"\n").replace(/\n/g,"<br/>");
+
+    previewEl.innerHTML = `<div class="wa-preview-inner">${preview}</div>`;
+    previewEl.classList.remove("hidden");
+  };
+
+  window.updateWaPreview = (type) => {
+    // Auto-hide preview when editing
+    const previewEl = document.getElementById(`wa-preview-${type}`);
+    if(previewEl && !previewEl.classList.contains("hidden")) {
+      previewWaTpl(type); // refresh live
+    }
+  };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -2162,6 +2291,59 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);}
   main{padding:0;}
   #report-section{display:block!important;}
   #orders-section,#menu-section,#settings-section{display:none!important;}
+}
+
+/* ── WA TEMPLATE EDITOR ── */
+.wa-vars-box{
+  background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;
+  padding:12px 14px;font-size:12px;
+}
+.wa-vars-title{font-weight:700;color:#166534;margin-bottom:8px;}
+.wa-vars-grid{
+  display:grid;grid-template-columns:auto 1fr;gap:4px 10px;
+  align-items:center;margin-bottom:8px;
+}
+.wa-var{
+  background:#dcfce7;color:#15803d;font-family:var(--font-mono);
+  font-size:11px;padding:2px 6px;border-radius:4px;white-space:nowrap;
+}
+.wa-vars-note{font-size:11px;color:#4ade80;color:#166534;opacity:.7;}
+
+.wa-tpl-wrap{position:relative;}
+.wa-tpl-input{
+  resize:vertical;font-family:var(--font-mono)!important;
+  font-size:12px!important;line-height:1.6;min-height:100px;
+}
+.wa-tpl-actions{
+  display:flex;gap:8px;margin-top:6px;
+}
+.wa-tpl-btn{
+  font-size:12px;font-weight:600;padding:5px 12px;
+  border-radius:8px;cursor:pointer;border:1.5px solid var(--border2);
+  background:var(--bg);color:var(--text2);transition:all .15s;
+  font-family:var(--font);
+}
+.wa-tpl-btn:hover{background:var(--border);color:var(--text);}
+.wa-tpl-btn--preview{
+  background:#eff6ff;border-color:#93c5fd;color:#1d4ed8;
+}
+.wa-tpl-btn--preview:hover{background:#dbeafe;}
+
+.wa-preview{
+  margin-top:8px;border-radius:10px;overflow:hidden;
+}
+.wa-preview.hidden{display:none;}
+.wa-preview-inner{
+  background:#dcfce7;
+  border:1px solid #86efac;
+  border-radius:10px;
+  padding:12px 14px;
+  font-size:13px;
+  color:#14532d;
+  line-height:1.6;
+  font-family:var(--font);
+  white-space:pre-wrap;
+  word-break:break-word;
 }
 
 /* ── PULSE ── */
