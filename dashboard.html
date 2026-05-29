@@ -326,96 +326,63 @@ window.deleteAllDone=deleteAllDone;
 // KOT - Kitchen Order Ticket (cetak ke printer thermal dapur)
 // ─────────────────────────────────────────────────────────────
 function printKOT(order) {
-  const now    = new Date();
-  const jam    = now.toLocaleTimeString("id-ID", {hour:"2-digit", minute:"2-digit"});
-  const tgl    = now.toLocaleDateString("id-ID", {day:"2-digit", month:"2-digit", year:"2-digit"});
-  const SEP58  = "─".repeat(32);
-  const SEP58D = "═".repeat(32);
+  const now  = new Date();
+  const jam  = now.toLocaleTimeString("id-ID", {hour:"2-digit", minute:"2-digit"});
+  const tgl  = now.toLocaleDateString("id-ID",  {day:"2-digit", month:"2-digit", year:"2-digit"});
+  const SEP  = "\u2500".repeat(32);
+  const SEPD = "\u2550".repeat(32);
+  const store= appSettings.storeName || "Sawah Senja";
 
-  // Build item rows
-  const itemRows = (order.items||[]).map(i => {
-    const qty  = String(i.qty).padStart(2);
-    const name = i.name;
-    const note = i.notes ? `   >> ${i.notes}` : "";
-    return `${qty}x ${name}${note ? "
-" + note : ""}`;
-  }).join("
-");
+  // Pre-build item HTML - no nested template literals
+  const itemsHtml = (order.items||[]).map(function(i) {
+    var noteHtml = i.notes
+      ? '<div class="note">&#x21B3; ' + i.notes + '</div>'
+      : '';
+    return '<div class="item">'
+         + '<div class="bold">' + String(i.qty).padStart(2) + 'x  ' + i.name + '</div>'
+         + noteHtml
+         + '</div>';
+  }).join('');
 
-  // KOT HTML - dioptimasi untuk 58mm thermal
-  const kotHtml = `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8"/>
-<style>
-  @page {
-    width: 58mm;
-    margin: 2mm 3mm;
-  }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body {
-    font-family: 'Courier New', Courier, monospace;
-    font-size: 12px;
-    width: 52mm;
-    color: #000;
-    background: #fff;
-  }
-  .center  { text-align: center; }
-  .bold    { font-weight: bold; }
-  .large   { font-size: 16px; font-weight: bold; }
-  .xlarge  { font-size: 20px; font-weight: bold; letter-spacing: 2px; }
-  .sep     { white-space: pre; font-size: 10px; line-height: 1.2; }
-  .section { margin: 3px 0; }
-  .item    { margin: 4px 0; line-height: 1.5; }
-  .note    { font-size: 11px; padding-left: 6px; font-style: italic; }
-  .meta    { font-size: 11px; }
-  .area    { font-size: 14px; font-weight: bold; }
-  .footer  { font-size: 10px; text-align: center; margin-top: 4px; }
-</style>
-</head>
-<body>
-
-  <div class="section center">
-    <div class="bold" style="font-size:11px">KITCHEN ORDER TICKET</div>
-    <div class="bold" style="font-size:10px">${appSettings.storeName||"Sawah Senja"}</div>
-  </div>
-
-  <div class="sep">${SEP58D}</div>
-
-  <div class="section">
-    <div class="meta">No  : <span class="bold">${order.orderId||"-"}</span></div>
-    <div class="meta">Area: <span class="area">${order.areaCode||"-"}</span></div>
-    <div class="meta">Jam : ${jam} &nbsp; ${tgl}</div>
-    <div class="meta">Tamu: ${order.customerName||"-"}</div>
-  </div>
-
-  <div class="sep">${SEP58D}</div>
-
-  <div class="section bold center" style="font-size:13px">DAFTAR MASAK</div>
-  <div class="sep">${SEP58}</div>
-
-  <div class="section">
-    ${(order.items||[]).map(i=>`
-    <div class="item">
-      <div class="bold">${String(i.qty).padStart(2)}x  ${i.name}</div>
-      ${i.notes ? `<div class="note">&#x21B3; ${i.notes}</div>` : ""}
-    </div>`).join("")}
-  </div>
-
-  <div class="sep">${SEP58}</div>
-  <div class="footer">*** SEGERA DIPROSES ***</div>
-  <div style="height:8mm"></div>
-
-</body>
-</html>`;
+  // Build KOT HTML using string concatenation - safe from backtick conflicts
+  var kotHtml = '<!DOCTYPE html><html><head><meta charset="UTF-8"/>'
+    + '<style>'
+    + '@page{width:58mm;margin:2mm 3mm;}'
+    + '*{box-sizing:border-box;margin:0;padding:0;}'
+    + 'body{font-family:"Courier New",Courier,monospace;font-size:12px;width:52mm;color:#000;background:#fff;}'
+    + '.center{text-align:center;}.bold{font-weight:bold;}'
+    + '.sep{white-space:pre;font-size:10px;line-height:1.4;overflow:hidden;}'
+    + '.section{margin:3px 0;}.item{margin:4px 0;line-height:1.5;}'
+    + '.note{font-size:11px;padding-left:8px;font-style:italic;}'
+    + '.meta{font-size:11px;}.footer{font-size:10px;text-align:center;margin-top:4px;}'
+    + '</style></head><body>'
+    + '<div class="section center">'
+    +   '<div class="bold" style="font-size:11px">KITCHEN ORDER TICKET</div>'
+    +   '<div class="bold" style="font-size:10px">' + store + '</div>'
+    + '</div>'
+    + '<div class="sep">' + SEPD + '</div>'
+    + '<div class="section">'
+    +   '<div class="meta">No  : <b>' + (order.orderId||'-') + '</b></div>'
+    +   '<div class="meta">Area: <b style="font-size:14px">' + (order.areaCode||'-') + '</b></div>'
+    +   '<div class="meta">Jam : ' + jam + ' &nbsp; ' + tgl + '</div>'
+    +   '<div class="meta">Tamu: ' + (order.customerName||'-') + '</div>'
+    + '</div>'
+    + '<div class="sep">' + SEPD + '</div>'
+    + '<div class="section bold center" style="font-size:13px">DAFTAR MASAK</div>'
+    + '<div class="sep">' + SEP + '</div>'
+    + '<div class="section">' + itemsHtml + '</div>'
+    + '<div class="sep">' + SEP + '</div>'
+    + '<div class="footer">*** SEGERA DIPROSES ***</div>'
+    + '<div style="height:8mm"></div>'
+    + '</body></html>';
 
   // Buka popup print
-  const win = window.open("", "_blank", "width=300,height=500");
+  var win = window.open("", "_blank", "width=300,height=500");
   if (!win) { showToast("Popup diblokir browser. Izinkan popup untuk print.", "error"); return; }
   win.document.write(kotHtml);
   win.document.close();
   win.focus();
-  setTimeout(() => { win.print(); win.close(); }, 400);
+  setTimeout(function(){ win.print(); win.close(); }, 400);
 }
 window.printKOT = printKOT;
 
