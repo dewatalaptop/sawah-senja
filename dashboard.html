@@ -386,11 +386,60 @@ function openPOS(order) {
     statusEl.className="pos-pay-status "+(order.paymentStatus==="PAID"?"pos-pay-paid":order.paymentStatus==="PENDING"?"pos-pay-pending":"pos-pay-unpaid");
   }
 
+  // Reset cash section
+  const cashSec = document.getElementById("pos-cash-section");
+  if(cashSec) cashSec.style.display = "none";
+  const cashInput = document.getElementById("pos-cash-paid");
+  if(cashInput) cashInput.value = "";
+  const changeEl = document.getElementById("pos-cash-change");
+  if(changeEl) changeEl.textContent = "Rp 0";
+  changeEl?.classList.remove("pos-cash-change--ready");
+
+  // Pre-generate quick amount buttons based on order total
+  genQuickAmounts(order.total||0);
+
   // Show modal
   const modal=document.getElementById("pos-modal");
   modal.classList.remove("hidden");
   requestAnimationFrame(()=>modal.classList.add("pos-modal-visible"));
 }
+
+// ── Cash helper functions ─────────────────────────────────
+function onPosPaymentChange() {
+  const pm      = document.getElementById("pos-payment-method")?.value;
+  const cashSec = document.getElementById("pos-cash-section");
+  if(cashSec) cashSec.style.display = pm==="Cash" ? "block" : "none";
+}
+
+function onCashInput() {
+  if(!posOrder) return;
+  const paid   = parseFloat(document.getElementById("pos-cash-paid")?.value)||0;
+  const total  = posOrder.total||0;
+  const change = Math.max(0, paid - total);
+  const el     = document.getElementById("pos-cash-change");
+  if(el){
+    el.textContent = fmt(change);
+    el.classList.toggle("pos-cash-change--ready", paid >= total && paid > 0);
+  }
+}
+
+function genQuickAmounts(total) {
+  const wrap = document.getElementById("pos-quick-btns");
+  if(!wrap) return;
+  // Round up to common denominations
+  const rounds = [
+    Math.ceil(total/5000)*5000,
+    Math.ceil(total/10000)*10000,
+    Math.ceil(total/20000)*20000,
+    Math.ceil(total/50000)*50000,
+  ];
+  const unique = [...new Set(rounds)].filter((v,i)=>i<4).slice(0,4);
+  wrap.innerHTML = unique.map(v =>
+    `<button onclick="document.getElementById('pos-cash-paid').value=${v};onCashInput()" class="pos-quick-btn">${fmt(v)}</button>`
+  ).join("");
+}
+window.onPosPaymentChange = onPosPaymentChange;
+window.onCashInput        = onCashInput;
 
 function closePOS() {
   const modal=document.getElementById("pos-modal");
@@ -401,25 +450,48 @@ function closePOS() {
 
 async function confirmPOS() {
   if(!posOrder) return;
-  const btn=document.getElementById("btn-pos-confirm");
-  const pm=document.getElementById("pos-payment-method")?.value||"Cash";
-  if(btn){btn.disabled=true; btn.textContent="Memproses…";}
+  const btn = document.getElementById("btn-pos-confirm");
+  const pm  = document.getElementById("pos-payment-method")?.value || "Cash";
+  const isCash = pm === "Cash";
+
+  // Cash validation
+  if (isCash) {
+    const paidVal = parseFloat(document.getElementById("pos-cash-paid")?.value) || 0;
+    if (paidVal < (posOrder.total||0)) {
+      showToast("Uang yang dibayar kurang dari total!", "error");
+      return;
+    }
+  }
+
+  if(btn){btn.disabled=true; btn.innerHTML=`<svg class="w-4 h-4 animate-spin" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M4 12a8 8 0 018-8"/></svg> Memproses…`;}
 
   try {
-    // Update order: DONE + PAID
+    const total    = posOrder.total || 0;
+    const cashPaid = isCash ? (parseFloat(document.getElementById("pos-cash-paid")?.value)||0) : 0;
+    const cashChange = isCash ? Math.max(0, cashPaid - total) : 0;
+
+    // Update Firestore
     await updateDoc(doc(db,"orders",posOrder.id),{
       orderStatus:   "DONE",
       paymentStatus: "PAID",
       paymentMethod: pm,
+      cashPaid:      isCash ? cashPaid : null,
+      cashChange:    isCash ? cashChange : null,
       paidAt:        serverTimestamp(),
       updatedAt:     serverTimestamp(),
       completedAt:   serverTimestamp(),
     });
 
-    // Send receipt WA
-    sendReceiptWA({...posOrder, paymentMethod:pm, paymentStatus:"PAID"});
+    // Build nota URL using Firestore doc ID (posOrder.id)
+    const notaUrl = getNotaUrl(posOrder.id);
 
-    showToast("Pembayaran dikonfirmasi - Nota terkirim!","success");
+    // Send WhatsApp with nota link
+    sendNotaLinkWA(
+      {...posOrder, paymentMethod:pm, paymentStatus:"PAID", cashPaid, cashChange},
+      notaUrl
+    );
+
+    showToast("Pembayaran dikonfirmasi - Nota dikirim via WA!","success");
     closePOS();
   } catch(e){
     console.error(e);
@@ -431,61 +503,43 @@ window.confirmPOS=confirmPOS;
 window.closePOS=closePOS;
 window.openPOS=openPOS;
 
+// ── Nota URL builder ──────────────────────────────────────
+// Automatically resolves to same directory as dashboard.html
+function getNotaUrl(firestoreDocId) {
+  const base = window.location.href.replace(/[^/]*$/, "");
+  return `${base}nota.html?order=${firestoreDocId}`;
+}
+
 // ─────────────────────────────────────────────────────────────
-// WA - RECEIPT / NOTA PROFESIONAL
+// WA - NOTA LINK (singkat + profesional)
 // ─────────────────────────────────────────────────────────────
+function sendNotaLinkWA(order, notaUrl) {
+  const phone   = String(order.customerWhatsapp).replace(/\D/g,"");
+  const store   = appSettings.storeName || "Sawah Senja";
+  const isCash  = (order.paymentMethod||"").toLowerCase() === "cash";
+  const cashLine = isCash && order.cashPaid
+    ? `\n💵 Dibayar  : *${fmt(order.cashPaid)}*\n💰 Kembalian: *${fmt(order.cashChange||0)}*`
+    : "";
+
+  const msg = encodeURIComponent(
+    `Halo *${order.customerName}* 👋\n\n` +
+    `Terima kasih sudah makan di *${store}*! 🌾\n\n` +
+    `✅ Pembayaran *LUNAS* - ${order.paymentMethod}\n` +
+    `🧾 No. Order: *${order.orderId}*\n` +
+    `💳 Total: *${fmt(order.total||0)}*` +
+    cashLine +
+    `\n\n📋 *Lihat nota lengkap Anda di sini:*\n${notaUrl}\n\n` +
+    `_${appSettings.receiptFooter||"Terima kasih telah berkunjung"}_`
+  );
+
+  window.open(`https://wa.me/${phone}?text=${msg}`, "_blank");
+  updateDoc(doc(db,"orders",order.id),{receiptSent:true,notaUrl}).catch(()=>{});
+}
+
+// Kirim ulang nota (dari card DONE)
 function sendReceiptWA(order) {
-  const phone=String(order.customerWhatsapp).replace(/\D/g,"");
-  const now=new Date();
-  const tgl=now.toLocaleDateString("id-ID",{day:"2-digit",month:"long",year:"numeric"});
-  const jam=now.toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"});
-
-  const subtotal=order.subtotal||0;
-  const fee=calcOrderFee(order);
-  const total=order.total||0;
-  const feeLabel=order.serviceFeeLabel||appSettings.serviceFeeLabel||"Service fee";
-
-  // Item lines - rata kanan dengan padding
-  const itemLines=(order.items||[]).map(i=>{
-    const name=`${i.qty}× ${i.name}`;
-    const price=fmt(i.price*i.qty);
-    return `${name}\n   └ ${price}`;
-  }).join("\n");
-
-  // Separator line
-  const SEP="─────────────────────";
-
-  const receipt=
-`╔═══════════════════════╗
-║   *${(appSettings.storeName||"Sawah Senja").toUpperCase().padEnd(20)}*  ║
-╚═══════════════════════╝
-
-📋 *NOTA TRANSAKSI*
-${SEP}
-No. Order : *${order.orderId}*
-Tanggal   : ${tgl}
-Jam       : ${jam}
-Area      : ${order.areaCode||"-"}
-Kasir     : ${currentUser?.email?.split("@")[0]||"Staff"}
-${SEP}
-
-*PESANAN:*
-${itemLines}
-
-${SEP}
-Subtotal  : ${fmt(subtotal)}${fee>0?`\n${feeLabel.padEnd(10)}: ${fmt(fee)}`:""}
-*TOTAL    : ${fmt(total)}*
-${SEP}
-Pembayaran: *${order.paymentMethod||"-"}*
-Status    : ✅ *LUNAS*
-${SEP}
-
-${appSettings.receiptFooter||"Terima kasih sudah makan di Sawah Senja 🌾"}
-${appSettings.storeAddress?`\n📍 ${appSettings.storeAddress}`:""}${appSettings.storePhone?`\n📞 ${appSettings.storePhone}`:""}`;
-
-  const url=`https://wa.me/${phone}?text=${encodeURIComponent(receipt)}`;
-  window.open(url,"_blank");
-  updateDoc(doc(db,"orders",order.id),{receiptSent:true}).catch(()=>{});
+  const notaUrl = getNotaUrl(order.id);
+  sendNotaLinkWA(order, notaUrl);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1282,6 +1336,44 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);}
 .pos-btn-cancel{background:var(--bg);color:var(--text2);font-family:var(--font);font-size:14px;font-weight:600;padding:14px 18px;border-radius:12px;border:1.5px solid var(--border2);cursor:pointer;transition:all .15s;}
 .pos-btn-cancel:hover{background:var(--border);color:var(--text);}
 
+/* ── POS CASH INPUT ── */
+.pos-cash-section{
+  margin-top:12px;
+  background:#f8fafc;
+  border:1.5px solid #e2e8f0;
+  border-radius:12px;
+  padding:14px;
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+}
+.pos-cash-row{display:flex;align-items:center;justify-content:space-between;gap:12px;}
+.pos-cash-row--change{padding-top:8px;border-top:1px solid #e2e8f0;}
+.pos-cash-label{font-size:12px;font-weight:700;color:#64748b;flex-shrink:0;}
+.pos-cash-input{
+  flex:1;text-align:right;
+  background:#fff;border:1.5px solid #cbd5e1;border-radius:9px;
+  padding:9px 12px;font-size:15px;font-family:var(--font-mono);
+  font-weight:700;color:#0f172a;outline:none;
+  transition:border-color .15s;
+}
+.pos-cash-input:focus{border-color:var(--orange);}
+.pos-cash-change{
+  font-family:var(--font-mono);font-size:18px;font-weight:800;
+  color:#94a3b8;transition:color .2s;
+}
+.pos-cash-change--ready{color:#059669;}
+.pos-quick-btns{display:flex;gap:6px;flex-wrap:wrap;}
+.pos-quick-btn{
+  flex:1;min-width:0;padding:7px 8px;
+  background:#fff;border:1.5px solid #e2e8f0;
+  border-radius:8px;font-family:var(--font-mono);
+  font-size:11px;font-weight:700;color:#475569;
+  cursor:pointer;transition:all .15s;white-space:nowrap;
+}
+.pos-quick-btn:hover{background:#fef3c7;border-color:#fcd34d;color:#92400e;}
+.pos-quick-btn:active{transform:scale(.96);}
+
 /* ── PULSE ── */
 .pulse-dot{animation:pulseDot 2s infinite;}
 @keyframes pulseDot{0%,100%{opacity:1;}50%{opacity:.4;}}
@@ -1493,13 +1585,31 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);}
           <span>💳 Metode Pembayaran</span>
           <span id="pos-payment-status" class="pos-pay-status pos-pay-unpaid">UNPAID</span>
         </div>
-        <select id="pos-payment-method" class="pos-select">
+        <select id="pos-payment-method" class="pos-select" onchange="onPosPaymentChange()">
           <option value="Cash">💵 Cash - Bayar Tunai</option>
           <option value="QRIS">📱 QRIS - Scan QR</option>
           <option value="Transfer">🏦 Transfer Bank</option>
           <option value="Debit">💳 Kartu Debit</option>
         </select>
-        <div class="mt-2 text-xs text-slate-400">Setelah konfirmasi: status order → <strong>Selesai</strong>, payment → <strong>PAID</strong>, nota dikirim via WhatsApp.</div>
+
+        <!-- Cash input - hanya muncul jika Cash dipilih -->
+        <div id="pos-cash-section" class="pos-cash-section" style="display:none">
+          <div class="pos-cash-row">
+            <label class="pos-cash-label">Uang Diterima (Rp)</label>
+            <input id="pos-cash-paid" type="number" placeholder="0" min="0" step="1000"
+              class="pos-cash-input" oninput="onCashInput()"/>
+          </div>
+          <div class="pos-cash-row pos-cash-row--change">
+            <span class="pos-cash-label">Kembalian</span>
+            <span id="pos-cash-change" class="pos-cash-change">Rp 0</span>
+          </div>
+          <!-- Quick amount buttons -->
+          <div class="pos-quick-btns" id="pos-quick-btns"></div>
+        </div>
+
+        <div class="mt-3 text-xs text-slate-400">
+          Setelah konfirmasi: order <strong>Selesai</strong> · payment <strong>PAID</strong> · nota dikirim via WhatsApp
+        </div>
       </div>
 
       <!-- Footer -->
