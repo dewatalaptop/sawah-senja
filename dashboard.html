@@ -875,7 +875,11 @@ function renderOrders() {
       if(action==="start-cooking")  updateStatus(id,"COOKING");
       if(action==="mark-ready")     updateStatus(id,"READY");
       if(action==="open-pos")       openPOS(order);
-      if(action==="print-kot")      printKOT(order);      // FIX B8: POS instead of direct complete
+      if(action==="print-kot") {
+        printKOT(order);
+        // Auto update ke COOKING saat KOT dicetak (jika masih NEW)
+        if(order.orderStatus==="NEW") updateStatus(id,"COOKING");
+      }      // FIX B8: POS instead of direct complete
       if(action==="send-wa")        sendReadyWA(order);  // FIX B9: ready notification only
       if(action==="send-receipt")   sendReceiptWA(order);
       if(action==="delete-order")   deleteOrder(id,btn.dataset.label);
@@ -2113,8 +2117,16 @@ document.addEventListener("DOMContentLoaded",()=>{
   document.getElementById("btn-logout").addEventListener("click",doLogout);
   document.getElementById("btn-refresh").addEventListener("click",()=>{ startOrdersListener(); showToast("Listener di-refresh","info"); });
   document.getElementById("btn-fullscreen").addEventListener("click",()=>{
-    if(!document.fullscreenElement) document.documentElement.requestFullscreen().catch(()=>{});
-    else document.exitFullscreen();
+    const el = document.documentElement;
+    if(!document.fullscreenElement && !document.webkitFullscreenElement) {
+      // requestFullscreen + webkit prefix untuk iOS/Safari
+      const req = el.requestFullscreen || el.webkitRequestFullscreen;
+      if(req) req.call(el).catch(()=>{});
+      else { /* iOS tidak support fullscreen — abaikan */ }
+    } else {
+      const exit = document.exitFullscreen || document.webkitExitFullscreen;
+      if(exit) exit.call(document).catch(()=>{});
+    }
   });
 
   document.querySelectorAll("[data-filter]").forEach(btn=>{
