@@ -195,7 +195,7 @@ let unsubOrders=null, unsubMenu=null, unsubSettings=null;
 let knownOrderIds=new Set(), audioCtx=null;
 let menuItems=[], activeTab="orders";
 let menuEditTarget=null, menuModalOpen=false;
-let posModalOpen=false, posOrder=null;    // POS state
+
 let currentUser=null, domReady=false, pendingAuthUser=undefined;
 
 let appSettings = {
@@ -228,11 +228,7 @@ const elapsedMin = ts => { if(!ts) return 0; const d=ts.toDate?ts.toDate():new D
 const STATUS_ORDER = {NEW:0,COOKING:1,READY:2,DONE:3};
 const STATUS_LABEL = {NEW:"Baru",COOKING:"Masak",READY:"Siap",DONE:"Selesai"};
 
-// FIX B2/B3: compute fee from order data, not from live appSettings
-function calcOrderFee(order) {
-  // Fee sudah tersimpan di order saat checkout — gunakan itu
-  return order.serviceFee || 0;
-}
+
 
 function calcFeeFromSettings(subtotal) {
   if (!appSettings.serviceFeeEnabled) return 0;
@@ -436,7 +432,7 @@ async function saveSettings() {
       storePhone:        document.getElementById("sf-store-phone")?.value.trim()||"",
       receiptFooter:     document.getElementById("sf-receipt-footer")?.value.trim()||"Terima kasih telah makan di Sawah Senja. Sampai jumpa lagi! 🌾",
       waTplReady:        document.getElementById("sf-wa-ready")?.value.trim()||appSettings.waTplReady,
-      waTplNota:         document.getElementById("sf-wa-nota")?.value.trim()||appSettings.waTplNota,
+
       updatedAt:         serverTimestamp(),
     };
     await setDoc(doc(db,"settings","general"),payload,{merge:true});
@@ -635,223 +631,21 @@ function sendReadyWA(order) {
 
 // ─────────────────────────────────────────────────────────────
 // POS — Proses Pembayaran + Kirim Nota
-// ─────────────────────────────────────────────────────────────
-function openPOS(order) {
-  posOrder   = order;
-  posModalOpen = true;
 
-  // Isi modal
-  document.getElementById("pos-order-id").textContent   = order.orderId||"-";
-  document.getElementById("pos-customer").textContent   = order.customerName||"-";
-  document.getElementById("pos-area").textContent       = order.areaCode||"-";
-  document.getElementById("pos-phone").textContent      = order.customerWhatsapp||"-";
 
-  // Items
-  const itemsHtml=(order.items||[]).map(i=>`
-    <div class="pos-item-row">
-      <div class="pos-item-name">${i.qty}× ${i.name}${i.notes?` <span class="pos-item-note">(${i.notes})</span>`:""}</div>
-      <div class="pos-item-price">${fmt((i.price||0)*(i.qty||0))}</div>
-    </div>`).join("");
-  document.getElementById("pos-items-list").innerHTML=itemsHtml;
-
-  // Pricing
-  const subtotal=order.subtotal||0;
-  const fee=calcOrderFee(order);
-  const total=order.total||0;
-  document.getElementById("pos-subtotal").textContent=fmt(subtotal);
-  const feeRow=document.getElementById("pos-fee-row");
-  const feeLabel=document.getElementById("pos-fee-label");
-  const feeAmt=document.getElementById("pos-fee-amount");
-  if(fee>0){
-    feeRow.style.display="flex";
-    feeLabel.textContent=order.serviceFeeLabel||appSettings.serviceFeeLabel||"Service fee";
-    feeAmt.textContent=fmt(fee);
-  } else {
-    feeRow.style.display="none";
-  }
-  document.getElementById("pos-total").textContent=fmt(total);
-
-  // Status badge
-  const statusEl=document.getElementById("pos-payment-status");
-  if(statusEl){
-    statusEl.textContent=order.paymentStatus||"UNPAID";
-    statusEl.className="pos-pay-status "+(order.paymentStatus==="PAID"?"pos-pay-paid":order.paymentStatus==="PENDING"?"pos-pay-pending":"pos-pay-unpaid");
-  }
-
-  // Reset cash inputs first
-  const cashInput = document.getElementById("pos-cash-paid");
-  if(cashInput) cashInput.value = "";
-  const changeEl = document.getElementById("pos-cash-change");
-  if(changeEl) changeEl.textContent = "Rp 0";
-  changeEl?.classList.remove("pos-cash-change--ready");
-
-  // Payment method pre-select — THEN show/hide cash section based on method
-  const pmSel=document.getElementById("pos-payment-method");
-  if(pmSel) {
-    pmSel.value = order.paymentMethod || "Cash";
-    const cashSec = document.getElementById("pos-cash-section");
-    if(cashSec) cashSec.style.display = pmSel.value === "Cash" ? "block" : "none";
-  }
-
-  // Pre-generate quick amount buttons based on order total
-  genQuickAmounts(order.total||0);
-
-  // Show modal
-  const modal=document.getElementById("pos-modal");
-  modal.classList.remove("hidden");
-  requestAnimationFrame(()=>modal.classList.add("pos-modal-visible"));
-}
-
-// ── Cash helper functions ─────────────────────────────────
-function onPosPaymentChange() {
-  const pm      = document.getElementById("pos-payment-method")?.value;
-  const cashSec = document.getElementById("pos-cash-section");
-  if(cashSec) cashSec.style.display = pm==="Cash" ? "block" : "none";
-}
-
-function onCashInput() {
-  if(!posOrder) return;
-  const paid   = parseFloat(document.getElementById("pos-cash-paid")?.value)||0;
-  const total  = posOrder.total||0;
-  const change = Math.max(0, paid - total);
-  const el     = document.getElementById("pos-cash-change");
-  if(el){
-    el.textContent = fmt(change);
-    el.classList.toggle("pos-cash-change--ready", paid >= total && paid > 0);
-  }
-}
-
-function genQuickAmounts(total) {
-  const wrap = document.getElementById("pos-quick-btns");
-  if(!wrap) return;
-  // Round up to common denominations
-  const rounds = [
-    Math.ceil(total/5000)*5000,
-    Math.ceil(total/10000)*10000,
-    Math.ceil(total/20000)*20000,
-    Math.ceil(total/50000)*50000,
-  ];
-  const unique = [...new Set(rounds)].filter((v,i)=>i<4).slice(0,4);
-  wrap.innerHTML = unique.map(v =>
-    `<button onclick="document.getElementById('pos-cash-paid').value=${v};onCashInput()" class="pos-quick-btn">${fmt(v)}</button>`
-  ).join("");
-}
-window.onPosPaymentChange = onPosPaymentChange;
-window.onCashInput        = onCashInput;
-
-function closePOS() {
-  const modal=document.getElementById("pos-modal");
-  modal.classList.remove("pos-modal-visible");
-  setTimeout(()=>modal.classList.add("hidden"),220);
-  posOrder=null; posModalOpen=false;
-}
-
-async function confirmPOS() {
-  if(!posOrder) return;
-  const btn = document.getElementById("btn-pos-confirm");
-  const pm  = document.getElementById("pos-payment-method")?.value || "Cash";
-  const isCash = pm === "Cash";
-
-  // Cash validation
-  if (isCash) {
-    const paidVal = parseFloat(document.getElementById("pos-cash-paid")?.value) || 0;
-    if (paidVal < (posOrder.total||0)) {
-      showToast("Uang yang dibayar kurang dari total!", "error");
-      return;
-    }
-  }
-
-  if(btn){btn.disabled=true; btn.innerHTML=`<svg class="w-4 h-4 animate-spin" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M4 12a8 8 0 018-8"/></svg> Memproses…`;}
-
-  try {
-    const total    = posOrder.total || 0;
-    const cashPaid = isCash ? (parseFloat(document.getElementById("pos-cash-paid")?.value)||0) : 0;
-    const cashChange = isCash ? Math.max(0, cashPaid - total) : 0;
-
-    // Update Firestore
-    await updateDoc(doc(db,"orders",posOrder.id),{
-      orderStatus:   "DONE",
-      paymentStatus: "PAID",
-      paymentMethod: pm,
-      cashPaid:      isCash ? cashPaid : null,
-      cashChange:    isCash ? cashChange : null,
-      paidAt:        serverTimestamp(),
-      updatedAt:     serverTimestamp(),
-      completedAt:   serverTimestamp(),
-    });
-
-    // Build nota URL using Firestore doc ID (posOrder.id)
-    const notaUrl = getNotaUrl(posOrder.id);
-
-    // Send WhatsApp with nota link
-    sendNotaLinkWA(
-      {...posOrder, paymentMethod:pm, paymentStatus:"PAID", cashPaid, cashChange},
-      notaUrl
-    );
-
-    showToast("Pembayaran dikonfirmasi — Nota dikirim via WA!","success");
-    closePOS();
-  } catch(e){
-    console.error(e);
-    showToast("Gagal konfirmasi: "+e.message,"error");
-    if(btn){btn.disabled=false; btn.textContent="Konfirmasi & Kirim Nota";}
-  }
-}
-window.confirmPOS=confirmPOS;
-window.closePOS=closePOS;
-window.openPOS=openPOS;
-
-// ── Nota URL builder ──────────────────────────────────────
-// Automatically resolves to same directory as dashboard.html
-function getNotaUrl(firestoreDocId) {
-  const base = window.location.href.replace(/[^/]*$/, "");
-  return `${base}nota.html?order=${firestoreDocId}`;
-}
 
 // ─────────────────────────────────────────────────────────────
 // WA — NOTA LINK (singkat + profesional)
-// ─────────────────────────────────────────────────────────────
-function sendNotaLinkWA(order, notaUrl) {
-  const phone   = String(order.customerWhatsapp).replace(/\D/g,"");
-  const isCash  = (order.paymentMethod||"").toLowerCase() === "cash";
-  const cashDetail = isCash && order.cashPaid
-    ? `\n💵 Dibayar  : *${fmt(order.cashPaid)}*\n💰 Kembalian: *${fmt(order.cashChange||0)}*`
-    : "";
-
-  const tpl = appSettings.waTplNota ||
-    "Halo Kak *{nama}* 👋\n\nTerima kasih telah makan di *{toko}*! 🌾\n\n✅ Pembayaran *LUNAS* — {metodeBayar}\n🧾 No. Order: *#{orderId}*\n💳 Total: *{total}*{cashDetail}\n\n📋 *Nota:*\n{notaUrl}\n\n_{receiptFooter}_";
-
-  const text = interpolateWA(tpl, {
-    nama:          order.customerName || "",
-    orderId:       order.orderId      || "",
-    metodeBayar:   order.paymentMethod|| "-",
-    toko:          appSettings.storeName || "Sawah Senja",
-    total:         fmt(order.total||0),
-    cashDetail:    cashDetail,
-    notaUrl:       notaUrl || "",
-    receiptFooter: appSettings.receiptFooter || "Terima kasih telah berkunjung",
-  });
-
-  window.open(`https://wa.me/${phone}?text=${encodeURIComponent(text)}`, "_blank");
-  updateDoc(doc(db,"orders",order.id),{receiptSent:true,notaUrl}).catch(()=>{});
-}
-
-// Kirim ulang nota (dari card DONE)
-function sendReceiptWA(order) {
-  const notaUrl = getNotaUrl(order.id);
-  sendNotaLinkWA(order, notaUrl);
-}
 
 // ─────────────────────────────────────────────────────────────
 // ANALYTICS
 // ─────────────────────────────────────────────────────────────
 function calcAnalytics() {
-  const total   = allOrders.length;
-  const active  = allOrders.filter(o=>o.orderStatus!=="DONE").length;
-  const revenue = allOrders.filter(o=>o.paymentStatus==="PAID").reduce((s,o)=>s+(o.total||0),0);
-  const avg     = allOrders.length?Math.round(allOrders.reduce((s,o)=>s+(o.total||0),0)/allOrders.length):0;
-  const items   = allOrders.reduce((s,o)=>s+(o.items||[]).reduce((a,i)=>a+(i.qty||0),0),0);
-  return{total,revenue,avg,items,active};
+  const total  = allOrders.length;
+  const active = allOrders.filter(o=>o.orderStatus!=="DONE").length;
+  const done   = allOrders.filter(o=>o.orderStatus==="DONE").length;
+  const items  = allOrders.reduce((s,o)=>s+(o.items||[]).reduce((a,i)=>a+(i.qty||0),0),0);
+  return{total,active,done,items};
 }
 
 function getFilteredOrders() {
@@ -882,11 +676,11 @@ function renderHeaderStats() {
   const a=calcAnalytics();
   const set=(id,v)=>{const el=document.getElementById(id); if(el) el.textContent=v;};
   set("stat-total",   a.total);
-  set("stat-revenue", fmt(a.revenue));
-  set("stat-avg",     fmt(a.avg));
+  set("stat-revenue", a.active);
+  set("stat-avg",     a.done);
   set("stat-items",   a.items);
   set("hdr-orders",   a.total+" order");
-  set("hdr-revenue",  fmt(a.revenue));
+  set("hdr-revenue",  a.active+" aktif");
   set("hdr-active-num", a.active+" aktif");
 }
 
@@ -926,14 +720,12 @@ function renderOrders() {
       if(!order) return;
       if(action==="start-cooking")  updateStatus(id,"COOKING");
       if(action==="mark-ready")     updateStatus(id,"READY");
-      if(action==="open-pos")       openPOS(order);
+      if(action==="mark-done")      updateStatus(id,"DONE");
       if(action==="print-kot") {
         printKOT(order);
-        // Auto update ke COOKING saat KOT dicetak (jika masih NEW)
         if(order.orderStatus==="NEW") updateStatus(id,"COOKING");
-      }      // FIX B8: POS instead of direct complete
-      if(action==="send-wa")        sendReadyWA(order);  // FIX B9: ready notification only
-      if(action==="send-receipt")   sendReceiptWA(order);
+      }
+      if(action==="send-wa")        sendReadyWA(order);
       if(action==="delete-order")   deleteOrder(id,btn.dataset.label);
     });
   });
@@ -943,8 +735,7 @@ function buildCard(o) {
   const elapsed  = elapsedMin(o.createdAt);
   const accent   = cardAccentCls(o.orderStatus);
   const badge    = statusBadgeCls(o.orderStatus);
-  const fee      = calcOrderFee(o);
-  const subtotal = o.subtotal || (o.total - fee);
+
 
   const itemsHtml=(o.items||[]).map(i=>`
     <div class="flex justify-between text-xs py-0.5">
@@ -959,9 +750,9 @@ function buildCard(o) {
   else if(o.orderStatus==="COOKING")
     actionBtn=`<button data-action="mark-ready" data-id="${o.id}" class="act-btn act-btn--green">✔ Tandai Siap</button>`;
   else if(o.orderStatus==="READY")
-    actionBtn=`<button data-action="open-pos" data-id="${o.id}" class="act-btn act-btn--pos">
-      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/></svg>
-      Proses Bayar
+    actionBtn=`<button data-action="mark-done" data-id="${o.id}" class="act-btn act-btn--green">
+      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
+      Selesai
     </button>`;
 
   // KOT button — tampil di NEW dan COOKING
@@ -983,20 +774,9 @@ function buildCard(o) {
       </button>`
     : "";
 
-  const payColor=o.paymentStatus==="PAID"?"pay-paid":o.paymentStatus==="PENDING"?"pay-pending":"pay-unpaid";
 
-  // DONE card: show receipt send button + delete
+  // DONE card: hanya tombol hapus
   const doneActions = o.orderStatus==="DONE" ? `
-    ${o.receiptSent
-      ? `<button data-action="send-receipt" data-id="${o.id}" class="act-btn act-btn--wa opacity-60">
-           <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/><path d="M12 0C5.373 0 0 5.373 0 12c0 2.127.558 4.126 1.533 5.858L0 24l6.335-1.502A11.955 11.955 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 22c-1.853 0-3.585-.5-5.082-1.373l-.362-.217-3.761.892.952-3.669-.239-.381A9.955 9.955 0 012 12C2 6.477 6.477 2 12 2s10 4.477 10 10-4.477 10-10 10z"/></svg>
-           Nota Terkirim
-         </button>`
-      : `<button data-action="send-receipt" data-id="${o.id}" class="act-btn act-btn--wa">
-           <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/><path d="M12 0C5.373 0 0 5.373 0 12c0 2.127.558 4.126 1.533 5.858L0 24l6.335-1.502A11.955 11.955 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 22c-1.853 0-3.585-.5-5.082-1.373l-.362-.217-3.761.892.952-3.669-.239-.381A9.955 9.955 0 012 12C2 6.477 6.477 2 12 2s10 4.477 10 10-4.477 10-10 10z"/></svg>
-           Kirim Nota
-         </button>`
-    }
     <button data-action="delete-order" data-id="${o.id}" data-label="${o.orderId||o.id}" class="act-btn act-btn--delete ml-auto">
       <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
       Hapus
@@ -1013,7 +793,6 @@ function buildCard(o) {
         </div>
         <div class="flex flex-col items-end gap-1.5">
           <span class="status-badge ${badge}">${STATUS_LABEL[o.orderStatus]||o.orderStatus}</span>
-          <span class="pay-badge ${payColor}">${o.paymentStatus||"-"}</span>
         </div>
       </div>
       <div class="flex items-center gap-2 mb-3">
@@ -1250,19 +1029,7 @@ function renderSettingsPanel() {
         <div id="wa-preview-ready" class="wa-preview hidden"></div>
       </div>
 
-      <!-- Template 2: Nota Pembayaran -->
-      <div class="sf-field mt-4">
-        <label class="sf-label">🧾 Template: Nota Pembayaran Lunas</label>
-        <div class="wa-tpl-wrap">
-          <textarea id="sf-wa-nota" rows="8" class="sf-input wa-tpl-input" oninput="updateWaPreview('nota')"
-            placeholder="Halo Kak *{nama}* ...">${s.waTplNota||""}</textarea>
-          <div class="wa-tpl-actions">
-            <button onclick="resetWaTpl('nota')" class="wa-tpl-btn">↺ Reset ke Default</button>
-            <button onclick="previewWaTpl('nota')" class="wa-tpl-btn wa-tpl-btn--preview">👁 Preview</button>
-          </div>
-        </div>
-        <div id="wa-preview-nota" class="wa-preview hidden"></div>
-      </div>
+
     </div>
 
   </div>
@@ -2218,14 +1985,9 @@ document.addEventListener("DOMContentLoaded",()=>{
     });
   });
 
-  // POS modal close on backdrop click
-  document.getElementById("pos-modal-backdrop")?.addEventListener("click", closePOS);
 
   document.addEventListener("keydown",e=>{
-    if(e.key==="Escape"){
-      if(posModalOpen) closePOS();
-      else if(menuModalOpen) closeMenuModal();
-    }
+    if(e.key==="Escape" && menuModalOpen) closeMenuModal();
   });
 });
 </script>
@@ -2315,10 +2077,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);}
 .badge-cooking{background:#fef3c7;color:#d97706;border-color:#fcd34d;}
 .badge-ready{background:#d1fae5;color:#059669;border-color:#6ee7b7;}
 .badge-done{background:#f1f5f9;color:#64748b;border-color:#cbd5e1;}
-.pay-badge{display:inline-flex;font-size:10px;font-weight:700;padding:2px 7px;border-radius:100px;}
-.pay-paid{background:#d1fae5;color:#059669;}
-.pay-pending{background:#fef3c7;color:#d97706;}
-.pay-unpaid{background:#f1f5f9;color:#64748b;}
+
 
 /* ── ACTION BUTTONS ── */
 .act-btn{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:700;padding:7px 14px;border-radius:9px;cursor:pointer;border:none;transition:all .15s;font-family:var(--font);}
@@ -2329,7 +2088,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);}
 .act-btn--wa{background:#dcfce7;color:#15803d;border:1.5px solid #86efac;}.act-btn--wa:hover{background:#bbf7d0;}
 .act-btn--delete{background:#f8fafc;color:#94a3b8;border:1.5px solid var(--border);}.act-btn--delete:hover{background:#fee2e2;color:#dc2626;border-color:#fca5a5;}
 /* POS button — prominent */
-.act-btn--pos{background:linear-gradient(135deg,var(--orange),var(--orange2));color:#fff;border:none;box-shadow:0 2px 8px rgba(234,88,12,.3);}.act-btn--pos:hover{opacity:.9;box-shadow:0 4px 12px rgba(234,88,12,.4);}
+
 /* KOT print button */
 .act-btn--kot{background:#faf5ff;color:#6d28d9;border:1.5px solid #c4b5fd;}.act-btn--kot:hover{background:#ede9fe;}
 
@@ -2390,72 +2149,6 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);}
 .form-input:focus{border-color:var(--orange);}
 .form-label{display:block;font-size:11px;font-weight:700;color:var(--text3);margin-bottom:5px;text-transform:uppercase;letter-spacing:.05em;}
 
-/* ── POS MODAL ── */
-#pos-modal{opacity:0;transition:opacity .22s;}
-#pos-modal.pos-modal-visible{opacity:1;}
-.pos-panel{background:#fff;border-radius:20px;width:100%;max-width:480px;max-height:92dvh;overflow-y:auto;box-shadow:0 24px 64px rgba(0,0,0,.15);}
-.pos-header{background:linear-gradient(135deg,var(--orange),var(--orange2));padding:20px 24px;border-radius:20px 20px 0 0;color:#fff;}
-.pos-header__title{font-size:18px;font-weight:800;letter-spacing:-.01em;}
-.pos-header__sub{font-size:12px;opacity:.85;margin-top:2px;}
-.pos-section{padding:16px 24px;border-bottom:1px solid var(--border);}
-.pos-section__label{font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;}
-.pos-item-row{display:flex;justify-content:space-between;align-items:baseline;padding:4px 0;}
-.pos-item-name{font-size:13px;color:var(--text);font-weight:500;}
-.pos-item-note{font-size:11px;color:var(--text3);font-style:italic;}
-.pos-item-price{font-family:var(--font-mono);font-size:13px;color:var(--text2);flex-shrink:0;margin-left:8px;}
-.pos-total-row{display:flex;justify-content:space-between;font-size:14px;color:var(--text2);padding:3px 0;}
-.pos-total-row--grand{font-size:18px;font-weight:900;color:var(--text);padding-top:8px;border-top:2px solid var(--border2);margin-top:4px;}
-.pos-pay-status{display:inline-flex;font-size:11px;font-weight:700;padding:3px 9px;border-radius:100px;}
-.pos-pay-paid{background:#d1fae5;color:#059669;}
-.pos-pay-pending{background:#fef3c7;color:#d97706;}
-.pos-pay-unpaid{background:#fee2e2;color:#dc2626;}
-.pos-select{width:100%;background:var(--bg);border:1.5px solid var(--border2);border-radius:10px;padding:11px 14px;font-size:14px;color:var(--text);font-family:var(--font);outline:none;cursor:pointer;transition:border-color .15s;}
-.pos-select:focus{border-color:var(--orange);}
-.pos-footer{padding:16px 24px 20px;display:flex;gap:10px;}
-.pos-btn-confirm{flex:1;background:linear-gradient(135deg,var(--orange),var(--orange2));color:#fff;font-family:var(--font);font-size:15px;font-weight:800;padding:14px;border-radius:12px;border:none;cursor:pointer;transition:all .15s;box-shadow:0 4px 14px rgba(234,88,12,.3);display:flex;align-items:center;justify-content:center;gap:8px;}
-.pos-btn-confirm:hover{transform:translateY(-1px);box-shadow:0 6px 20px rgba(234,88,12,.35);}
-.pos-btn-confirm:active{transform:scale(.97);}
-.pos-btn-confirm:disabled{opacity:.55;cursor:not-allowed;transform:none;}
-.pos-btn-cancel{background:var(--bg);color:var(--text2);font-family:var(--font);font-size:14px;font-weight:600;padding:14px 18px;border-radius:12px;border:1.5px solid var(--border2);cursor:pointer;transition:all .15s;}
-.pos-btn-cancel:hover{background:var(--border);color:var(--text);}
-
-/* ── POS CASH INPUT ── */
-.pos-cash-section{
-  margin-top:12px;
-  background:#f8fafc;
-  border:1.5px solid #e2e8f0;
-  border-radius:12px;
-  padding:14px;
-  display:flex;
-  flex-direction:column;
-  gap:10px;
-}
-.pos-cash-row{display:flex;align-items:center;justify-content:space-between;gap:12px;}
-.pos-cash-row--change{padding-top:8px;border-top:1px solid #e2e8f0;}
-.pos-cash-label{font-size:12px;font-weight:700;color:#64748b;flex-shrink:0;}
-.pos-cash-input{
-  flex:1;text-align:right;
-  background:#fff;border:1.5px solid #cbd5e1;border-radius:9px;
-  padding:9px 12px;font-size:15px;font-family:var(--font-mono);
-  font-weight:700;color:#0f172a;outline:none;
-  transition:border-color .15s;
-}
-.pos-cash-input:focus{border-color:var(--orange);}
-.pos-cash-change{
-  font-family:var(--font-mono);font-size:18px;font-weight:800;
-  color:#94a3b8;transition:color .2s;
-}
-.pos-cash-change--ready{color:#059669;}
-.pos-quick-btns{display:flex;gap:6px;flex-wrap:wrap;}
-.pos-quick-btn{
-  flex:1;min-width:0;padding:7px 8px;
-  background:#fff;border:1.5px solid #e2e8f0;
-  border-radius:8px;font-family:var(--font-mono);
-  font-size:11px;font-weight:700;color:#475569;
-  cursor:pointer;transition:all .15s;white-space:nowrap;
-}
-.pos-quick-btn:hover{background:#fef3c7;border-color:#fcd34d;color:#92400e;}
-.pos-quick-btn:active{transform:scale(.96);}
 
 /* ── REPORT ── */
 @keyframes spin{to{transform:rotate(360deg);}}
@@ -2733,8 +2426,8 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);}
     <!-- STAT CARDS -->
     <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
       <div class="stat-card"><div class="stat-card__label">Total Order</div><div id="stat-total" class="stat-card__value">-</div><div class="stat-card__sub">Hari ini</div></div>
-      <div class="stat-card"><div class="stat-card__label">Revenue (Paid)</div><div id="stat-revenue" class="stat-card__value" style="font-size:15px">-</div><div class="stat-card__sub">Hari ini</div></div>
-      <div class="stat-card"><div class="stat-card__label">Rata-rata</div><div id="stat-avg" class="stat-card__value" style="font-size:15px">-</div><div class="stat-card__sub">Per order</div></div>
+      <div class="stat-card"><div class="stat-card__label">Order Aktif</div><div id="stat-revenue" class="stat-card__value" style="font-size:22px">-</div><div class="stat-card__sub">Sedang diproses</div></div>
+      <div class="stat-card"><div class="stat-card__label">Sudah Selesai</div><div id="stat-avg" class="stat-card__value" style="font-size:22px">-</div><div class="stat-card__sub">Hari ini</div></div>
       <div class="stat-card"><div class="stat-card__label">Item Terjual</div><div id="stat-items" class="stat-card__value">-</div><div class="stat-card__sub">Total qty</div></div>
     </div>
 
@@ -2848,104 +2541,6 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);}
     </div>
 
   </main>
-</div>
-
-<!-- ════════════════ POS MODAL ════════════════ -->
-<div id="pos-modal" class="fixed inset-0 z-[9500] hidden">
-  <div id="pos-modal-backdrop" class="absolute inset-0 bg-black/40 backdrop-blur-sm"></div>
-  <div class="absolute inset-0 flex items-center justify-center p-4">
-    <div class="pos-panel relative">
-
-      <!-- Header -->
-      <div class="pos-header">
-        <div class="flex justify-between items-start">
-          <div>
-            <div class="pos-header__title">💳 Proses Pembayaran</div>
-            <div class="pos-header__sub">Konfirmasi & kirim nota ke customer</div>
-          </div>
-          <button onclick="closePOS()" class="w-8 h-8 rounded-lg bg-white/20 hover:bg-white/30 flex items-center justify-center text-white transition-all ml-4">
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
-          </button>
-        </div>
-        <!-- Order info bar -->
-        <div class="mt-3 grid grid-cols-2 gap-2">
-          <div class="bg-white/15 rounded-lg px-3 py-2">
-            <div style="font-size:10px;opacity:.7;text-transform:uppercase;letter-spacing:.05em;">No. Order</div>
-            <div id="pos-order-id" class="font-mono font-bold text-base mt-0.5">-</div>
-          </div>
-          <div class="bg-white/15 rounded-lg px-3 py-2">
-            <div style="font-size:10px;opacity:.7;text-transform:uppercase;letter-spacing:.05em;">Customer</div>
-            <div id="pos-customer" class="font-semibold text-sm mt-0.5 truncate">-</div>
-          </div>
-          <div class="bg-white/15 rounded-lg px-3 py-2">
-            <div style="font-size:10px;opacity:.7;text-transform:uppercase;letter-spacing:.05em;">Area</div>
-            <div id="pos-area" class="font-mono font-bold text-sm mt-0.5">-</div>
-          </div>
-          <div class="bg-white/15 rounded-lg px-3 py-2">
-            <div style="font-size:10px;opacity:.7;text-transform:uppercase;letter-spacing:.05em;">WhatsApp</div>
-            <div id="pos-phone" class="font-mono text-xs mt-0.5 truncate">-</div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Items -->
-      <div class="pos-section">
-        <div class="pos-section__label">🧾 Item Pesanan</div>
-        <div id="pos-items-list" class="space-y-1"></div>
-      </div>
-
-      <!-- Pricing -->
-      <div class="pos-section">
-        <div class="pos-section__label">💰 Rincian Harga</div>
-        <div class="pos-total-row"><span>Subtotal</span><span id="pos-subtotal">-</span></div>
-        <div id="pos-fee-row" class="pos-total-row" style="display:none"><span id="pos-fee-label">Service fee</span><span id="pos-fee-amount">-</span></div>
-        <div class="pos-total-row pos-total-row--grand"><span>TOTAL</span><span id="pos-total">-</span></div>
-      </div>
-
-      <!-- Payment -->
-      <div class="pos-section" style="border-bottom:none">
-        <div class="pos-section__label flex items-center justify-between">
-          <span>💳 Metode Pembayaran</span>
-          <span id="pos-payment-status" class="pos-pay-status pos-pay-unpaid">UNPAID</span>
-        </div>
-        <select id="pos-payment-method" class="pos-select" onchange="onPosPaymentChange()">
-          <option value="Cash">💵 Cash — Bayar Tunai</option>
-          <option value="QRIS">📱 QRIS — Scan QR</option>
-          <option value="Transfer">🏦 Transfer Bank</option>
-          <option value="Debit">💳 Kartu Debit</option>
-        </select>
-
-        <!-- Cash input — hanya muncul jika Cash dipilih -->
-        <div id="pos-cash-section" class="pos-cash-section" style="display:none">
-          <div class="pos-cash-row">
-            <label class="pos-cash-label">Uang Diterima (Rp)</label>
-            <input id="pos-cash-paid" type="number" placeholder="0" min="0" step="1000"
-              class="pos-cash-input" oninput="onCashInput()"/>
-          </div>
-          <div class="pos-cash-row pos-cash-row--change">
-            <span class="pos-cash-label">Kembalian</span>
-            <span id="pos-cash-change" class="pos-cash-change">Rp 0</span>
-          </div>
-          <!-- Quick amount buttons -->
-          <div class="pos-quick-btns" id="pos-quick-btns"></div>
-        </div>
-
-        <div class="mt-3 text-xs text-slate-400">
-          Setelah konfirmasi: order <strong>Selesai</strong> · payment <strong>PAID</strong> · nota dikirim via WhatsApp
-        </div>
-      </div>
-
-      <!-- Footer -->
-      <div class="pos-footer">
-        <button id="btn-pos-confirm" onclick="confirmPOS()" class="pos-btn-confirm">
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-          Konfirmasi & Kirim Nota
-        </button>
-        <button onclick="closePOS()" class="pos-btn-cancel">Batal</button>
-      </div>
-
-    </div>
-  </div>
 </div>
 
 <!-- ════════════════ MENU MODAL ════════════════ -->
