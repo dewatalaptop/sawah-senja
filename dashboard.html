@@ -488,56 +488,80 @@ function printKOT(order) {
   const SEPD = "\u2550".repeat(32);
   const store= appSettings.storeName || "Sawah Senja";
 
-  // Pre-build item HTML — no nested template literals
+  // Pre-build item HTML
   const itemsHtml = (order.items||[]).map(function(i) {
     var noteHtml = i.notes
-      ? '<div class="note">&#x21B3; ' + i.notes + '</div>'
+      ? '<div class="kot-note">&#x21B3; ' + i.notes + '</div>'
       : '';
-    return '<div class="item">'
-         + '<div class="bold">' + String(i.qty).padStart(2) + 'x  ' + i.name + '</div>'
+    return '<div class="kot-item">'
+         + '<div class="kot-bold">' + String(i.qty).padStart(2) + 'x  ' + i.name + '</div>'
          + noteHtml
          + '</div>';
   }).join('');
 
-  // Build KOT HTML using string concatenation — safe from backtick conflicts
-  var kotHtml = '<!DOCTYPE html><html><head><meta charset="UTF-8"/>'
+  // Hapus frame lama jika ada
+  var old = document.getElementById('__kot_frame__');
+  if (old) old.parentNode.removeChild(old);
+
+  // Buat hidden iframe — lebih reliable di Android Chrome vs popup window
+  var frame = document.createElement('iframe');
+  frame.id = '__kot_frame__';
+  frame.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;border:none;opacity:0;pointer-events:none;';
+  document.body.appendChild(frame);
+
+  var fdoc = frame.contentDocument || frame.contentWindow.document;
+  fdoc.open();
+  fdoc.write(
+    '<!DOCTYPE html><html><head><meta charset="UTF-8"/>'
     + '<style>'
-    + '@page{width:58mm;margin:2mm 3mm;}'
+    + '@page{size:58mm auto;margin:2mm 3mm;}'
     + '*{box-sizing:border-box;margin:0;padding:0;}'
     + 'body{font-family:"Courier New",Courier,monospace;font-size:12px;width:52mm;color:#000;background:#fff;}'
-    + '.center{text-align:center;}.bold{font-weight:bold;}'
-    + '.sep{white-space:pre;font-size:10px;line-height:1.4;overflow:hidden;}'
-    + '.section{margin:3px 0;}.item{margin:4px 0;line-height:1.5;}'
-    + '.note{font-size:11px;padding-left:8px;font-style:italic;}'
-    + '.meta{font-size:11px;}.footer{font-size:10px;text-align:center;margin-top:4px;}'
+    + '.kot-center{text-align:center;}'
+    + '.kot-bold{font-weight:bold;}'
+    + '.kot-sep{white-space:pre;font-size:10px;line-height:1.4;overflow:hidden;display:block;}'
+    + '.kot-section{margin:3px 0;}'
+    + '.kot-item{margin:5px 0;line-height:1.6;}'
+    + '.kot-note{font-size:11px;padding-left:10px;font-style:italic;}'
+    + '.kot-meta{font-size:11px;line-height:1.6;}'
+    + '.kot-footer{font-size:10px;text-align:center;margin-top:6px;}'
     + '</style></head><body>'
-    + '<div class="section center">'
-    +   '<div class="bold" style="font-size:11px">KITCHEN ORDER TICKET</div>'
-    +   '<div class="bold" style="font-size:10px">' + store + '</div>'
+    + '<div class="kot-section kot-center">'
+    +   '<div class="kot-bold" style="font-size:12px">KITCHEN ORDER TICKET</div>'
+    +   '<div style="font-size:10px">' + store + '</div>'
     + '</div>'
-    + '<div class="sep">' + SEPD + '</div>'
-    + '<div class="section">'
-    +   '<div class="meta">No  : <b>' + (order.orderId||'-') + '</b></div>'
-    +   '<div class="meta">Area: <b style="font-size:14px">' + (order.areaCode||'-') + '</b></div>'
-    +   '<div class="meta">Jam : ' + jam + ' &nbsp; ' + tgl + '</div>'
-    +   '<div class="meta">Tamu: ' + (order.customerName||'-') + '</div>'
+    + '<div class="kot-sep">' + SEPD + '</div>'
+    + '<div class="kot-section">'
+    +   '<div class="kot-meta">No  : <b>' + (order.orderId||'-') + '</b></div>'
+    +   '<div class="kot-meta">Area: <b style="font-size:15px;letter-spacing:1px">' + (order.areaCode||'-') + '</b></div>'
+    +   '<div class="kot-meta">Jam : ' + jam + '  ' + tgl + '</div>'
+    +   '<div class="kot-meta">Tamu: ' + (order.customerName||'-') + '</div>'
     + '</div>'
-    + '<div class="sep">' + SEPD + '</div>'
-    + '<div class="section bold center" style="font-size:13px">DAFTAR MASAK</div>'
-    + '<div class="sep">' + SEP + '</div>'
-    + '<div class="section">' + itemsHtml + '</div>'
-    + '<div class="sep">' + SEP + '</div>'
-    + '<div class="footer">*** SEGERA DIPROSES ***</div>'
-    + '<div style="height:8mm"></div>'
-    + '<' + '/body><' + '/html>';
+    + '<div class="kot-sep">' + SEPD + '</div>'
+    + '<div class="kot-section kot-bold kot-center" style="font-size:13px;margin:4px 0">DAFTAR MASAK</div>'
+    + '<div class="kot-sep">' + SEP + '</div>'
+    + '<div class="kot-section">' + itemsHtml + '</div>'
+    + '<div class="kot-sep">' + SEP + '</div>'
+    + '<div class="kot-footer">*** SEGERA DIPROSES ***</div>'
+    + '<div style="height:6mm"></div>'
+    + '<' + '/body><' + '/html>'
+  );
+  fdoc.close();
 
-  // Buka popup print
-  var win = window.open("", "_blank", "width=300,height=500");
-  if (!win) { showToast("Popup diblokir browser. Izinkan popup untuk print.", "error"); return; }
-  win.document.write(kotHtml);
-  win.document.close();
-  win.focus();
-  setTimeout(function(){ win.print(); win.close(); }, 400);
+  // Tunggu render lalu print
+  setTimeout(function() {
+    try {
+      frame.contentWindow.focus();
+      frame.contentWindow.print();
+    } catch(e) {
+      showToast("Gagal print: " + e.message, "error");
+    }
+    // Bersihkan iframe setelah print dialog
+    setTimeout(function() {
+      var f = document.getElementById('__kot_frame__');
+      if (f) f.parentNode.removeChild(f);
+    }, 5000);
+  }, 700);
 }
 window.printKOT = printKOT;
 
