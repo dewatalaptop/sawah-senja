@@ -354,8 +354,7 @@ function startOrdersListener() {
   const q=query(
     collection(db,"orders"),
     where("createdAt",">=",Timestamp.fromDate(today)),
-    where("archived","!=",true),
-    orderBy("archived","asc"),
+    where("archived","==",false),
     orderBy("createdAt","desc")
   );
   unsubOrders=onSnapshot(q, snap=>{
