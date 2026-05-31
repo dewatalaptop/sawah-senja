@@ -213,7 +213,6 @@ let appSettings = {
   receiptFooter:     "Terima kasih telah makan di Sawah Senja. Sampai jumpa lagi! 🌾",
   // Template pesan WhatsApp — bisa diedit via Pengaturan
   waTplReady: "Halo Kak *{nama}* 👋\n\nPesanan Kakak dengan nomor *#{orderId}* sudah *siap diambil!* 🌾\n\n*Pesanan:*\n{items}\n\nMohon segera menuju pickup counter kami ya, Kak.\nMetode pembayaran: *{metodeBayar}*\n\nTerima kasih sudah menunggu, Kak! 🙏\n_{toko}_",
-  waTplNota:  "Halo Kak *{nama}* 👋\n\nTerima kasih telah makan di *{toko}*. Kami sangat senang bisa melayani Kakak hari ini! 🌾\n\n✅ Pembayaran *LUNAS* — {metodeBayar}\n🧾 No. Order: *#{orderId}*\n💳 Total: *{total}*{cashDetail}\n\n📋 *Nota lengkap Kakak tersedia di sini:*\n{notaUrl}\n\nSemoga berkenan dan sampai jumpa lagi, Kak! 🙏\n_{receiptFooter}_",
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -355,6 +354,8 @@ function startOrdersListener() {
   const q=query(
     collection(db,"orders"),
     where("createdAt",">=",Timestamp.fromDate(today)),
+    where("archived","!=",true),
+    orderBy("archived","asc"),
     orderBy("createdAt","desc")
   );
   unsubOrders=onSnapshot(q, snap=>{
@@ -404,7 +405,6 @@ function startSettingsListener() {
         storePhone:        d.storePhone        ||"",
         receiptFooter:     d.receiptFooter     ||"Terima kasih telah makan di Sawah Senja. Sampai jumpa lagi! 🌾",
         waTplReady: d.waTplReady || "Halo Kak *{nama}* 👋\n\nPesanan Kakak dengan nomor *#{orderId}* sudah *siap diambil!* 🌾\n\n*Pesanan:*\n{items}\n\nMohon segera menuju pickup counter kami ya, Kak.\nMetode pembayaran: *{metodeBayar}*\n\nTerima kasih sudah menunggu, Kak! 🙏\n_{toko}_",
-        waTplNota:  d.waTplNota  || "Halo Kak *{nama}* 👋\n\nTerima kasih telah makan di *{toko}*. Kami sangat senang bisa melayani Kakak hari ini! 🌾\n\n✅ Pembayaran *LUNAS* — {metodeBayar}\n🧾 No. Order: *#{orderId}*\n💳 Total: *{total}*{cashDetail}\n\n📋 *Nota lengkap Kakak tersedia di sini:*\n{notaUrl}\n\nSemoga berkenan dan sampai jumpa lagi, Kak! 🙏\n_{receiptFooter}_",
       };
     }
     if(activeTab==="settings") renderSettingsPanel();
@@ -455,21 +455,27 @@ async function updateStatus(orderId, newStatus) {
 }
 
 async function deleteOrder(orderId, orderLabel) {
-  if(!confirm(`Hapus order ${orderLabel}? Data tidak bisa dikembalikan.`)) return;
+  if(!confirm(`Arsipkan order ${orderLabel}?\nOrder akan disimpan di histori dan tidak tampil lagi di dashboard.`)) return;
   try {
-    await deleteDoc(doc(db,"orders",orderId));
-    showToast(`Order ${orderLabel} dihapus`,"info");
-  } catch(e){ showToast("Gagal hapus order","error"); }
+    await updateDoc(doc(db,"orders",orderId),{
+      archived:   true,
+      archivedAt: serverTimestamp(),
+    });
+    showToast(`Order ${orderLabel} diarsipkan`,"info");
+  } catch(e){ showToast("Gagal arsipkan order","error"); }
 }
 
 async function deleteAllDone() {
   const done=allOrders.filter(o=>o.orderStatus==="DONE");
   if(!done.length){ showToast("Tidak ada order selesai","info"); return; }
-  if(!confirm(`Hapus ${done.length} order selesai? Tindakan ini tidak bisa dibatalkan.`)) return;
+  if(!confirm(`Arsipkan ${done.length} order selesai?\nOrder tersimpan di histori laporan.`)) return;
   try {
-    await Promise.all(done.map(o=>deleteDoc(doc(db,"orders",o.id))));
-    showToast(`${done.length} order dihapus`,"success");
-  } catch(e){ showToast("Gagal hapus: "+e.message,"error"); }
+    await Promise.all(done.map(o=>updateDoc(doc(db,"orders",o.id),{
+      archived:   true,
+      archivedAt: serverTimestamp(),
+    })));
+    showToast(`${done.length} order diarsipkan`,"success");
+  } catch(e){ showToast("Gagal arsipkan: "+e.message,"error"); }
 }
 window.deleteAllDone=deleteAllDone;
 
@@ -778,8 +784,8 @@ function buildCard(o) {
   // DONE card: hanya tombol hapus
   const doneActions = o.orderStatus==="DONE" ? `
     <button data-action="delete-order" data-id="${o.id}" data-label="${o.orderId||o.id}" class="act-btn act-btn--delete ml-auto">
-      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
-      Hapus
+      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8l1 12a2 2 0 002 2h8a2 2 0 002-2L19 8m-9 4v4m4-4v4"/></svg>
+      Arsipkan
     </button>` : "";
 
   return `
@@ -2450,7 +2456,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);}
           <button onclick="deleteAllDone()" id="btn-delete-done"
             class="hidden flex-shrink-0 flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-xl border border-slate-200 bg-white text-slate-500 hover:bg-red-50 hover:text-red-500 hover:border-red-200 transition-all">
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
-            <span id="btn-delete-done-txt">Hapus Selesai</span>
+            <span id="btn-delete-done-txt">Arsipkan Selesai</span>
           </button>
         </div>
       </div>
