@@ -661,98 +661,144 @@ function printNota(order) {
   const store = appSettings.storeName || "Sawah Senja";
   const W     = 32;
 
+  // ── Helper functions ─────────────────────────────────────────
   function center(str) {
     str = String(str).slice(0, W);
     var pad = Math.floor((W - str.length) / 2);
     return " ".repeat(Math.max(0, pad)) + str;
   }
-  function row(label, value, bold) {
-    var v = String(value||"");
-    return label + v;
-  }
   function sep(ch) { return (ch||"-").repeat(W); }
 
-  const subtotal = order.subtotal||0;
-  const fee      = order.serviceFee||0;
-  const total    = order.total||0;
-  const feeLabel = order.serviceFeeLabel||appSettings.serviceFeeLabel||"Service fee";
+  // Word wrap: pecah teks panjang menjadi beberapa baris centered
+  function wrapCenter(str, maxW) {
+    str = String(str||"").trim();
+    if(!str) return [];
+    var words = str.split(" ");
+    var lines = [];
+    var cur   = "";
+    words.forEach(function(w) {
+      if((cur + (cur?" ":"") + w).length <= maxW) {
+        cur += (cur?" ":"") + w;
+      } else {
+        if(cur) lines.push(center(cur));
+        cur = w.slice(0, maxW);
+      }
+    });
+    if(cur) lines.push(center(cur));
+    return lines;
+  }
 
+  function sep(ch) { return (ch||"-").repeat(W); }
+
+  const subtotal  = order.subtotal || 0;
+  const fee       = order.serviceFee || 0;
+  const total     = order.total || 0;
+  const feeLabel  = order.serviceFeeLabel || appSettings.serviceFeeLabel || "Service fee";
+
+  // ── Build nota ────────────────────────────────────────────────
   var lines = [];
   lines.push("");
   lines.push(center(store.toUpperCase()));
-  lines.push(center(appSettings.storeAddress||""));
-  lines.push(center(appSettings.storePhone||""));
+
+  // Alamat — word wrap jika panjang
+  if(appSettings.storeAddress) {
+    wrapCenter(appSettings.storeAddress, W).forEach(function(l){ lines.push(l); });
+  }
+  if(appSettings.storePhone) {
+    lines.push(center(appSettings.storePhone));
+  }
+
   lines.push(sep("="));
   lines.push(center("NOTA TRANSAKSI"));
   lines.push(sep("="));
-  lines.push(row("No Order : ", order.orderId||"-"));
-  lines.push(row("Tanggal  : ", tgl));
-  lines.push(row("Jam      : ", jam));
-  lines.push(row("Area     : ", order.areaCode||"-"));
-  lines.push(row("Customer : ", (order.customerName||"-").slice(0,20)));
-  lines.push(row("Kasir    : ", currentUser?.email?.split("@")[0]||"Staff"));
+  lines.push("No Order : " + (order.orderId||"-"));
+  lines.push("Tanggal  : " + tgl);
+  lines.push("Jam      : " + jam);
+  lines.push("Area     : " + (order.areaCode||"-"));
+  lines.push("Customer : " + (order.customerName||"-").slice(0, 20));
+  lines.push("Kasir    : " + (currentUser&&currentUser.email?currentUser.email.split("@")[0]:"Staff"));
   lines.push(sep("-"));
   lines.push(center("PESANAN"));
   lines.push(sep("-"));
+
   (order.items||[]).forEach(function(i) {
-    var prefix = String(i.qty).padStart(2) + "x " + i.name;
+    var prefix = String(i.qty) + "x " + i.name;
     var price  = "Rp " + Number((i.price||0)*(i.qty||0)).toLocaleString("id-ID");
-    // Rata kanan harga
     var space  = W - prefix.length - price.length;
-    if(space > 0) lines.push(prefix + " ".repeat(space) + price);
-    else {
+    if(space > 0) {
+      lines.push(prefix + " ".repeat(space) + price);
+    } else {
+      // Nama item terlalu panjang — wrap
       lines.push(prefix.slice(0, W));
       lines.push(" ".repeat(W - price.length) + price);
     }
     if(i.notes) lines.push("  >> " + i.notes.slice(0, W-5));
   });
+
   lines.push(sep("-"));
+
   // Subtotal
   var subStr = "Rp " + Number(subtotal).toLocaleString("id-ID");
-  lines.push("Subtotal" + " ".repeat(W-8-subStr.length) + subStr);
+  lines.push("Subtotal" + " ".repeat(Math.max(1, W-8-subStr.length)) + subStr);
+
   // Fee
-  if(fee>0){
+  if(fee > 0) {
     var feeStr = "Rp " + Number(fee).toLocaleString("id-ID");
-    var lbl = feeLabel.slice(0,W-feeStr.length-1);
-    lines.push(lbl + " ".repeat(W-lbl.length-feeStr.length) + feeStr);
+    var lbl    = feeLabel.slice(0, W - feeStr.length - 1);
+    lines.push(lbl + " ".repeat(Math.max(1, W-lbl.length-feeStr.length)) + feeStr);
   }
+
   lines.push(sep("="));
+
+  // Total
   var totStr = "Rp " + Number(total).toLocaleString("id-ID");
-  lines.push("TOTAL" + " ".repeat(W-5-totStr.length) + totStr);
+  lines.push("TOTAL" + " ".repeat(Math.max(1, W-5-totStr.length)) + totStr);
   lines.push(sep("="));
-  lines.push(row("Bayar    : ", order.paymentMethod||"-"));
-  if(order.cashPaid){
+
+  lines.push("Bayar     : " + (order.paymentMethod||"-"));
+
+  // Cash detail
+  if(order.cashPaid) {
     var cpStr  = "Rp " + Number(order.cashPaid).toLocaleString("id-ID");
     var chgStr = "Rp " + Number(order.cashChange||0).toLocaleString("id-ID");
-    lines.push("Tunai" + " ".repeat(W-5-cpStr.length) + cpStr);
-    lines.push("Kembali" + " ".repeat(W-7-chgStr.length) + chgStr);
+    lines.push("Tunai" + " ".repeat(Math.max(1, W-5-cpStr.length)) + cpStr);
+    lines.push("Kembali" + " ".repeat(Math.max(1, W-7-chgStr.length)) + chgStr);
   }
+
   lines.push(sep("="));
   lines.push(center("** LUNAS **"));
   lines.push(sep("="));
-  lines.push(center(appSettings.receiptFooter||"Terima kasih!"));
+
+  // Footer — word wrap jika panjang
+  var footer = appSettings.receiptFooter || "Terima kasih!";
+  wrapCenter(footer, W).forEach(function(l){ lines.push(l); });
+
   lines.push("");
   lines.push("");
   lines.push("");
 
   var txt = lines.join("\n");
 
-  // Kirim ke RawBT
+  // ── Kirim ke RawBT via rawbt:// scheme ───────────────────────
+  // Format: rawbt://print?printer=NAME&text=ENCODED_TEXT
+  // Ini yang benar — bukan intent:// yang menyebabkan URL tercetak
   try {
-    var encoded = encodeURIComponent(txt);
-    var intentUrl = "intent://rawbt?printer=sawahsenja&text=" + encoded
-      + "#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end";
+    var encoded    = encodeURIComponent(txt);
+    var rawbtUrl   = "rawbt://print?printer=sawahsenja&text=" + encoded;
+
     var a = document.createElement("a");
-    a.href = intentUrl;
+    a.href = rawbtUrl;
     a.style.display = "none";
     document.body.appendChild(a);
     a.click();
-    setTimeout(function(){ document.body.removeChild(a); }, 1000);
+    setTimeout(function(){ document.body.removeChild(a); }, 1500);
     showToast("🖨 Nota dikirim ke printer…", "info");
   } catch(e) {
     console.error("printNota error:", e);
+    showToast("Printer error: " + e.message, "error");
   }
 }
+
 window.printNota = printNota;
 
 function sendReceiptWA(order) {
@@ -855,12 +901,11 @@ function printKOT(order) {
       // RawBT mendukung intent URL dengan parameter text
       // Encode teks dan arahkan ke RawBT
       var encoded = encodeURIComponent(txt);
-      var intentUrl = "intent://rawbt?printer=sawahsenja&text=" + encoded
-        + "#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end";
+      var rawbtUrl = "rawbt://print?printer=sawahsenja&text=" + encoded;
 
       // Buat link tersembunyi dan klik — ini trigger RawBT di Android
       var a = document.createElement("a");
-      a.href = intentUrl;
+      a.href = rawbtUrl;
       a.style.display = "none";
       document.body.appendChild(a);
       a.click();
@@ -920,7 +965,7 @@ function printKOT(order) {
       +   '</pre>'
       + '</div>'
       + '<div style="padding:0 20px 20px;display:flex;gap:10px;">'
-      +   '<a href="intent://rawbt#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end" '
+      +   '<a href="rawbt://print?printer=sawahsenja" '
       +      'style="flex:1;background:#2563eb;color:#fff;text-decoration:none;text-align:center;padding:12px;border-radius:12px;font-weight:800;font-size:13px;display:block;">Buka RawBT →</a>'
       +   '<button id="__kot_copy_btn__" '
       +     'style="background:#f1f5f9;border:1.5px solid #e2e8f0;border-radius:12px;padding:12px 16px;font-weight:700;font-size:13px;cursor:pointer;color:#475569;">📋 Copy</button>'
@@ -1662,6 +1707,133 @@ function fmtDateStr(str) { if(!str) return "-"; const d=new Date(str+"T00:00:00"
 function fmtDtFull(ts)   { if(!ts) return "-"; const d=ts.toDate?ts.toDate():new Date(ts); return d.toLocaleDateString("id-ID",{day:"2-digit",month:"2-digit",year:"numeric"})+" "+d.toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"}); }
 
 // ── Load orders for date range ────────────────────────────────
+
+// ── Hapus transaksi dari laporan (deleteDoc permanen + PIN) ────
+async function deleteReportOrder(docId, orderLabel) {
+  // Step 1: Konfirmasi dulu
+  if(!confirm(
+    "Hapus transaksi " + orderLabel + " secara permanen?\n\n" +
+    "⚠ Data ini akan hilang dan tidak bisa dikembalikan."
+  )) return;
+
+  // Step 2: Minta PIN — tampilkan modal PIN
+  showPinModal(function(pinOk) {
+    if(!pinOk) {
+      showToast("PIN salah — hapus dibatalkan", "error");
+      return;
+    }
+    // Step 3: Eksekusi hapus
+    deleteDoc(doc(db, "orders", docId))
+      .then(function() {
+        reportOrders = reportOrders.filter(function(o){ return o.id !== docId; });
+        renderReportPanel();
+        showToast("Transaksi " + orderLabel + " dihapus", "info");
+      })
+      .catch(function(e) {
+        console.error("deleteReportOrder error:", e);
+        showToast("Gagal hapus: " + e.message, "error");
+      });
+  });
+}
+window.deleteReportOrder = deleteReportOrder;
+
+// ── PIN Modal ─────────────────────────────────────────────────
+// PIN disimpan sebagai hash SHA-256 — tidak terlihat di source code
+const _PIN_HASH = "a12d7e0f60ed297880c0a10d3ecfc5c5f188d814b21587e66c6af2aa2b466a06"; // 437666
+
+async function _hashPin(pin) {
+  const buf  = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(pin));
+  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,"0")).join("");
+}
+
+function showPinModal(callback) {
+  // Hapus modal lama jika ada
+  var old = document.getElementById("__pin_modal__");
+  if(old) old.remove();
+
+  var modal = document.createElement("div");
+  modal.id = "__pin_modal__";
+  modal.style.cssText = [
+    "position:fixed;inset:0;z-index:99999",
+    "background:rgba(0,0,0,0.6);backdrop-filter:blur(4px)",
+    "display:flex;align-items:center;justify-content:center;padding:20px"
+  ].join(";");
+
+  modal.innerHTML = [
+    '<div style="background:#fff;border-radius:20px;width:100%;max-width:320px;overflow:hidden;box-shadow:0 24px 64px rgba(0,0,0,.25);">',
+      '<div style="background:linear-gradient(135deg,#dc2626,#ef4444);padding:18px 20px;">',
+        '<div style="color:#fff;font-weight:800;font-size:16px;">🔒 Masukkan PIN</div>',
+        '<div style="color:rgba(255,255,255,.8);font-size:12px;margin-top:2px;">Diperlukan untuk menghapus transaksi</div>',
+      '</div>',
+      '<div style="padding:20px;">',
+        '<input id="__pin_input__" type="password" inputmode="numeric" maxlength="10"',
+          ' placeholder="••••••"',
+          ' style="width:100%;border:2px solid #e2e8f0;border-radius:12px;padding:12px 16px;',
+                  'font-size:20px;font-family:monospace;letter-spacing:6px;text-align:center;',
+                  'outline:none;transition:border-color .15s;"',
+          ' oninput="this.style.borderColor='#e2e8f0'"',
+        '/>',
+        '<div id="__pin_err__" style="color:#dc2626;font-size:12px;text-align:center;margin-top:8px;min-height:18px;"></div>',
+        '<div style="display:flex;gap:10px;margin-top:12px;">',
+          '<button id="__pin_ok__"',
+            ' style="flex:1;background:linear-gradient(135deg,#dc2626,#ef4444);color:#fff;',
+                    'border:none;border-radius:12px;padding:12px;font-size:14px;',
+                    'font-weight:700;cursor:pointer;">',
+            'Konfirmasi',
+          '</button>',
+          '<button id="__pin_cancel__"',
+            ' style="background:#f1f5f9;color:#64748b;border:none;border-radius:12px;',
+                    'padding:12px 16px;font-size:14px;font-weight:600;cursor:pointer;">',
+            'Batal',
+          '</button>',
+        '</div>',
+      '</div>',
+    '</div>'
+  ].join("");
+
+  document.body.appendChild(modal);
+
+  var inp    = document.getElementById("__pin_input__");
+  var errEl  = document.getElementById("__pin_err__");
+  var okBtn  = document.getElementById("__pin_ok__");
+  var canBtn = document.getElementById("__pin_cancel__");
+
+  // Fokus otomatis
+  setTimeout(function(){ inp && inp.focus(); }, 50);
+
+  function closeModal() { modal.remove(); }
+
+  async function doConfirm() {
+    var pin = (inp ? inp.value : "").trim();
+    if(!pin) {
+      if(errEl) errEl.textContent = "PIN tidak boleh kosong";
+      inp && inp.focus();
+      return;
+    }
+    try {
+      var hash = await _hashPin(pin);
+      if(hash === _PIN_HASH) {
+        closeModal();
+        callback(true);
+      } else {
+        if(errEl) errEl.textContent = "PIN salah, coba lagi";
+        if(inp) { inp.value = ""; inp.style.borderColor = "#ef4444"; inp.focus(); }
+      }
+    } catch(e) {
+      if(errEl) errEl.textContent = "Error verifikasi PIN";
+    }
+  }
+
+  okBtn  && okBtn.addEventListener("click", doConfirm);
+  canBtn && canBtn.addEventListener("click", function(){ closeModal(); callback(false); });
+
+  // Enter untuk konfirmasi
+  inp && inp.addEventListener("keydown", function(e){
+    if(e.key === "Enter") doConfirm();
+    if(e.key === "Escape") { closeModal(); callback(false); }
+  });
+}
+
 async function loadReportOrders() {
   const fromEl = document.getElementById("rpt-from");
   const toEl   = document.getElementById("rpt-to");
@@ -2044,6 +2216,7 @@ function renderReportPanel() {
               <th class="text-center">Metode</th>
               <th class="text-center">Bayar</th>
               <th class="text-right">Total</th>
+              <th class="text-center no-print"></th>
             </tr>
           </thead>
           <tbody>
@@ -2058,6 +2231,12 @@ function renderReportPanel() {
               <td class="text-center text-xs">${o.paymentMethod||"-"}</td>
               <td class="text-center"><span class="rpt-pay-badge rpt-pay-${(o.paymentStatus||"").toLowerCase()}">${o.paymentStatus||"-"}</span></td>
               <td class="text-right mono font-semibold text-sm">${fmt(o.total||0)}</td>
+              <td class="text-center no-print">
+                <button onclick="deleteReportOrder('${o.id}','${o.orderId||o.id}')"
+                  class="rpt-del-btn" title="Hapus transaksi ini dari database">
+                  🗑
+                </button>
+              </td>
             </tr>`).join("")}
           </tbody>
           <tfoot>
@@ -2808,6 +2987,14 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);}
 .pos-cash-inp:focus{border-color:#ea580c;}
 .pos-quick-btn{padding:6px 12px;background:#fff;border:1.5px solid #e2e8f0;border-radius:8px;font-size:12px;font-weight:700;font-family:'Plus Jakarta Sans',sans-serif;color:#475569;cursor:pointer;transition:all .15s;}
 .pos-quick-btn:hover{background:#fff7ed;border-color:#fed7aa;color:#92400e;}
+
+/* Hapus transaksi di laporan */
+.rpt-del-btn{
+  background:none;border:none;cursor:pointer;font-size:14px;
+  opacity:.35;transition:opacity .15s;padding:2px 6px;border-radius:6px;
+}
+.rpt-del-btn:hover{opacity:1;background:#fee2e2;}
+@media print { .no-print{display:none!important;} }
 </style>
 
 </head>
