@@ -361,6 +361,8 @@ function startOrdersListener() {
     const orders=[]; let hasNew=false;
     snap.forEach(d=>{
       const data={id:d.id,...d.data()};
+      // Filter client-side: sembunyikan yang sudah diarsipkan
+      if(data.archived===true) return;
       orders.push(data);
       if(!knownOrderIds.has(d.id)&&knownOrderIds.size>0) hasNew=true;
       knownOrderIds.add(d.id);
@@ -599,8 +601,7 @@ async function confirmPOS() {
       paidAt:serverTimestamp(),updatedAt:serverTimestamp(),completedAt:serverTimestamp(),...extra,
     });
     const receiptOrder={...posOrder,paymentMethod:pm,paymentStatus:"PAID",...extra};
-    sendReceiptWA(receiptOrder);  // WA nota
-    printNota(receiptOrder);      // Cetak nota fisik via RawBT
+    printNota(receiptOrder);      // Cetak nota fisik via RawBT (otomatis)
     showToast("✅ Pembayaran dikonfirmasi — Nota WA terkirim!","success");
     closePOS();
   } catch(e){
@@ -1070,8 +1071,12 @@ function renderOrders() {
       const order=allOrders.find(o=>o.id===id);
       if(!order) return;
       if(action==="start-cooking") {
-        // Auto: update status + cetak KOT sekaligus (1 klik)
+        // 1 klik: update status COOKING + otomatis cetak KOT
         updateStatus(id,"COOKING");
+        printKOT(order);
+      }
+      if(action==="print-kot") {
+        // Cetak ulang KOT tanpa ubah status (bisa berkali-kali)
         printKOT(order);
       }
       if(action==="mark-ready")     updateStatus(id,"READY");
@@ -1130,8 +1135,15 @@ function buildCard(o) {
       Arsipkan
     </button>` : "";
 
-  // ── KOT (tidak tampil lagi — sudah auto saat Proses Masak) ──
-  const kotBtn = "";
+  // ── KOT: tampil di NEW dan COOKING, bisa dicetak berkali-kali ──
+  const kotBtn = (o.orderStatus==="NEW"||o.orderStatus==="COOKING")
+    ? `<button data-action="print-kot" data-id="${o.id}" class="act-btn act-btn--kot" title="Cetak ulang KOT">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/>
+        </svg>
+        KOT
+      </button>`
+    : "";
 
   const payColor = o.paymentStatus==="PAID"?"pay-paid":o.paymentStatus==="PENDING"?"pay-pending":"pay-unpaid";
 
@@ -3014,7 +3026,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);}
           <div class="flex gap-2 mt-2 flex-wrap" id="pos-quick-cash"></div>
         </div>
 
-        <div class="mt-2 text-xs text-slate-400">Setelah konfirmasi: order → <strong>Selesai</strong>, payment → <strong>PAID</strong>, nota WA terkirim.</div>
+        <div class="mt-2 text-xs text-slate-400">Setelah konfirmasi: order → <strong>Selesai</strong>, payment → <strong>PAID</strong>, nota fisik dicetak otomatis via printer.</div>
       </div>
       <div class="pos-footer">
         <button id="btn-pos-confirm" onclick="confirmPOS()" class="pos-btn-confirm">
