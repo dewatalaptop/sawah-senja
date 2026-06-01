@@ -1084,10 +1084,9 @@ function renderOrders() {
 }
 
 function buildCard(o) {
-  const elapsed  = elapsedMin(o.createdAt);
-  const accent   = cardAccentCls(o.orderStatus);
-  const badge    = statusBadgeCls(o.orderStatus);
-
+  const elapsed = elapsedMin(o.createdAt);
+  const accent  = cardAccentCls(o.orderStatus);
+  const badge   = statusBadgeCls(o.orderStatus);
 
   const itemsHtml=(o.items||[]).map(i=>`
     <div class="flex justify-between text-xs py-0.5">
@@ -1095,13 +1094,8 @@ function buildCard(o) {
       <span class="text-slate-500 font-mono">${fmt((i.price||0)*(i.qty||0))}</span>
     </div>`).join("");
 
-  // ── Tombol aksi per status ──────────────────────────────────
-  // NEW: Proses Masak → otomatis print KOT via action handler
-  // COOKING: Tandai Siap
-  // READY: Hubungi WA (panggil ambil) + Proses Bayar (POS)
-  // DONE: Kirim Nota + Arsipkan
-
-  let actionBtn="";
+  // ── Tombol utama per status ──────────────────────────────────
+  let actionBtn = "";
   if(o.orderStatus==="NEW")
     actionBtn=`<button data-action="start-cooking" data-id="${o.id}" class="act-btn act-btn--amber">
       <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>
@@ -1113,7 +1107,7 @@ function buildCard(o) {
       Tandai Siap
     </button>`;
 
-  // READY: dua tombol — Hubungi WA dulu, lalu Proses Bayar
+  // ── READY: Hubungi WA + Proses Bayar ────────────────────────
   const waBtn = o.orderStatus==="READY"
     ? `<button data-action="send-wa" data-id="${o.id}" class="act-btn act-btn--wa${o.whatsappSent?" opacity-60":""}">
         <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/><path d="M12 0C5.373 0 0 5.373 0 12c0 2.127.558 4.126 1.533 5.858L0 24l6.335-1.502A11.955 11.955 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 22c-1.853 0-3.585-.5-5.082-1.373l-.362-.217-3.761.892.952-3.669-.239-.381A9.955 9.955 0 012 12C2 6.477 6.477 2 12 2s10 4.477 10 10-4.477 10-10 10z"/></svg>
@@ -1125,7 +1119,7 @@ function buildCard(o) {
       </button>`
     : "";
 
-  // DONE: Kirim Nota + Arsipkan
+  // ── DONE: Kirim Nota + Arsipkan ──────────────────────────────
   const doneActions = o.orderStatus==="DONE" ? `
     <button data-action="send-receipt" data-id="${o.id}" class="act-btn act-btn--wa${o.receiptSent?" opacity-60":""}">
       <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/><path d="M12 0C5.373 0 0 5.373 0 12c0 2.127.558 4.126 1.533 5.858L0 24l6.335-1.502A11.955 11.955 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 22c-1.853 0-3.585-.5-5.082-1.373l-.362-.217-3.761.892.952-3.669-.239-.381A9.955 9.955 0 012 12C2 6.477 6.477 2 12 2s10 4.477 10 10-4.477 10-10 10z"/></svg>
@@ -1135,6 +1129,11 @@ function buildCard(o) {
       <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8l1 12a2 2 0 002 2h8a2 2 0 002-2L19 8m-9 4v4m4-4v4"/></svg>
       Arsipkan
     </button>` : "";
+
+  // ── KOT (tidak tampil lagi — sudah auto saat Proses Masak) ──
+  const kotBtn = "";
+
+  const payColor = o.paymentStatus==="PAID"?"pay-paid":o.paymentStatus==="PENDING"?"pay-pending":"pay-unpaid";
 
   return `
   <div class="order-card ${accent}">
@@ -1147,6 +1146,7 @@ function buildCard(o) {
         </div>
         <div class="flex flex-col items-end gap-1.5">
           <span class="status-badge ${badge}">${STATUS_LABEL[o.orderStatus]||o.orderStatus}</span>
+          <span class="pay-badge ${payColor}">${o.paymentStatus||"-"}</span>
         </div>
       </div>
       <div class="flex items-center gap-2 mb-3">
@@ -1172,9 +1172,7 @@ function buildCard(o) {
   </div>`;
 }
 
-// ─────────────────────────────────────────────────────────────
-// RENDER: MENU MANAGER
-// ─────────────────────────────────────────────────────────────
+
 function renderMenuManager() {
   const panel=document.getElementById("menu-manager-panel");
   if(!panel) return;
