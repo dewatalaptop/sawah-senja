@@ -485,14 +485,23 @@ function calcOrderFee(order) { return order.serviceFee || 0; }
 
 function openPOS(order) {
   posOrder=order; posModalOpen=true;
+
+  // Isi info order
   document.getElementById("pos-order-id").textContent  = order.orderId||"-";
   document.getElementById("pos-customer").textContent  = order.customerName||"-";
   document.getElementById("pos-area").textContent      = order.areaCode||"-";
   document.getElementById("pos-phone").textContent     = order.customerWhatsapp||"-";
+
+  // Items
   const itemsHtml=(order.items||[]).map(i=>
-    `<div class="pos-item-row"><div class="pos-item-name">${i.qty}× ${i.name}${i.notes?` <span class="pos-item-note">(${i.notes})</span>`:""}</div><div class="pos-item-price">${fmt((i.price||0)*(i.qty||0))}</div></div>`
+    `<div class="pos-item-row">
+       <div class="pos-item-name">${i.qty}× ${i.name}${i.notes?` <span class="pos-item-note">(${i.notes})</span>`:""}</div>
+       <div class="pos-item-price">${fmt((i.price||0)*(i.qty||0))}</div>
+     </div>`
   ).join("");
   document.getElementById("pos-items-list").innerHTML=itemsHtml;
+
+  // Pricing
   const subtotal=order.subtotal||0;
   const fee=calcOrderFee(order);
   const total=order.total||0;
@@ -503,18 +512,70 @@ function openPOS(order) {
     document.getElementById("pos-fee-label").textContent=order.serviceFeeLabel||appSettings.serviceFeeLabel||"Service fee";
     document.getElementById("pos-fee-amount").textContent=fmt(fee);
   } else { feeRow.style.display="none"; }
-  document.getElementById("pos-total").textContent=fmt(total);
+  document.getElementById("pos-total-val").textContent=fmt(total);
+
+  // Reset payment method → Cash default
   const pmSel=document.getElementById("pos-payment-method");
-  if(pmSel) pmSel.value=order.paymentMethod||"Cash";
+  if(pmSel){ pmSel.value=order.paymentMethod||"Cash"; onPOSPayMethodChange(); }
+
+  // Reset cash fields
+  const cashIn=document.getElementById("pos-cash-input");
+  if(cashIn) { cashIn.value=""; updateKembalian(); }
+
+  // Quick cash buttons: bilangan bulat di atas total
+  const total=order.total||0;
+  const qcEl=document.getElementById("pos-quick-cash");
+  if(qcEl){
+    const rounds=[5000,10000,20000,50000,100000];
+    const suggestions=rounds.filter(r=>r>=total).slice(0,4);
+    // Jika total sendiri bulat, tambahkan juga jumlah pas
+    if(!suggestions.includes(total)&&total>0) suggestions.unshift(total);
+    qcEl.innerHTML=suggestions.map(r=>
+      `<button class="pos-quick-btn" onclick="document.getElementById('pos-cash-input').value=${r};updateKembalian()">${fmt(r)}</button>`
+    ).join("");
+  }
+
+  // Payment status badge
   const statusEl=document.getElementById("pos-payment-status");
   if(statusEl){
-    statusEl.textContent=order.paymentStatus||"UNPAID";
-    statusEl.className="pos-pay-status "+(order.paymentStatus==="PAID"?"pos-pay-paid":order.paymentStatus==="PENDING"?"pos-pay-pending":"pos-pay-unpaid");
+    statusEl.textContent=order.paymentStatus==="PAID"?"LUNAS":"BELUM BAYAR";
+    statusEl.className="pos-pay-status "+(order.paymentStatus==="PAID"?"pos-pay-paid":"pos-pay-unpaid");
   }
+
+  // Show modal
   const modal=document.getElementById("pos-modal");
   modal.classList.remove("hidden");
   requestAnimationFrame(()=>modal.classList.add("pos-modal-visible"));
 }
+
+// Update tampilan cash/kembalian saat metode berubah
+function onPOSPayMethodChange() {
+  const pm=document.getElementById("pos-payment-method")?.value||"Cash";
+  const cashSection=document.getElementById("pos-cash-section");
+  if(cashSection) cashSection.style.display=pm==="Cash"?"block":"none";
+  updateKembalian();
+}
+window.onPOSPayMethodChange=onPOSPayMethodChange;
+
+// Hitung kembalian live
+function updateKembalian() {
+  if(!posOrder) return;
+  const total=posOrder.total||0;
+  const cashVal=parseInt(document.getElementById("pos-cash-input")?.value||"0")||0;
+  const kembalian=cashVal-total;
+  const el=document.getElementById("pos-kembalian");
+  if(!el) return;
+  if(cashVal>0){
+    el.textContent=kembalian>=0?fmt(kembalian):"Kurang: "+fmt(total-cashVal);
+    el.style.color=kembalian>=0?"#059669":"#dc2626";
+  } else {
+    el.textContent="-";
+    el.style.color="#94a3b8";
+  }
+}
+window.updateKembalian=updateKembalian;
+
+
 function closePOS() {
   const modal=document.getElementById("pos-modal");
   modal.classList.remove("pos-modal-visible");
@@ -525,19 +586,25 @@ async function confirmPOS() {
   if(!posOrder) return;
   const btn=document.getElementById("btn-pos-confirm");
   const pm=document.getElementById("pos-payment-method")?.value||"Cash";
-  if(btn){btn.disabled=true; btn.textContent="Memproses…";}
+  if(pm==="Cash"){
+    const cv=parseInt(document.getElementById("pos-cash-input")?.value)||0;
+    if(cv>0&&cv<(posOrder.total||0)){showToast("Uang kurang dari total!","error");return;}
+  }
+  if(btn){btn.disabled=true;btn.textContent="Memproses…";}
   try {
+    const cv=pm==="Cash"?(parseInt(document.getElementById("pos-cash-input")?.value)||0):0;
+    const chg=cv>0?Math.max(0,cv-(posOrder.total||0)):0;
+    const extra=pm==="Cash"&&cv>0?{cashPaid:cv,cashChange:chg}:{};
     await updateDoc(doc(db,"orders",posOrder.id),{
-      orderStatus:"DONE", paymentStatus:"PAID", paymentMethod:pm,
-      paidAt:serverTimestamp(), updatedAt:serverTimestamp(), completedAt:serverTimestamp(),
+      orderStatus:"DONE",paymentStatus:"PAID",paymentMethod:pm,
+      paidAt:serverTimestamp(),updatedAt:serverTimestamp(),completedAt:serverTimestamp(),...extra,
     });
-    sendReceiptWA({...posOrder, paymentMethod:pm, paymentStatus:"PAID"});
-    showToast("Pembayaran dikonfirmasi — Nota terkirim!","success");
+    sendReceiptWA({...posOrder,paymentMethod:pm,paymentStatus:"PAID",...extra});
+    showToast("✅ Pembayaran dikonfirmasi — Nota WA terkirim!","success");
     closePOS();
   } catch(e){
-    console.error(e);
-    showToast("Gagal konfirmasi: "+e.message,"error");
-    if(btn){btn.disabled=false; btn.textContent="Konfirmasi & Kirim Nota";}
+    console.error(e);showToast("Gagal: "+e.message,"error");
+    if(btn){btn.disabled=false;btn.textContent="Konfirmasi & Kirim Nota";}
   }
 }
 window.confirmPOS=confirmPOS;
@@ -570,6 +637,7 @@ function sendReceiptWA(order) {
   const feeLabel=order.serviceFeeLabel||appSettings.serviceFeeLabel||"Service fee";
   const itemLines=(order.items||[]).map(i=>`${i.qty}× ${i.name}\n   └ ${fmt((i.price||0)*(i.qty||0))}`).join("\n");
   const SEP="─────────────────────";
+  const cashDetail=order.cashPaid?`\nBayar     : ${fmt(order.cashPaid)}\nKembalian : *${fmt(order.cashChange||0)}*`:"";
   const storeName=(appSettings.storeName||"Sawah Senja").toUpperCase();
   const receipt=
 `╔═══════════════════════╗
@@ -592,7 +660,7 @@ ${SEP}
 Subtotal  : ${fmt(subtotal)}${fee>0?`\n${feeLabel.padEnd(10)}: ${fmt(fee)}`:""}
 *TOTAL    : ${fmt(total)}*
 ${SEP}
-Pembayaran: *${order.paymentMethod||"-"}*
+Pembayaran: *${order.paymentMethod||"-"}*${cashDetail}
 Status    : ✅ *LUNAS*
 ${SEP}
 
@@ -863,13 +931,13 @@ function renderOrders() {
       const{action,id}=btn.dataset;
       const order=allOrders.find(o=>o.id===id);
       if(!order) return;
-      if(action==="start-cooking")  updateStatus(id,"COOKING");
+      if(action==="start-cooking") {
+        // Auto: update status + cetak KOT sekaligus (1 klik)
+        updateStatus(id,"COOKING");
+        printKOT(order);
+      }
       if(action==="mark-ready")     updateStatus(id,"READY");
       if(action==="open-pos")       openPOS(order);
-      if(action==="print-kot") {
-        printKOT(order);
-        if(order.orderStatus==="NEW") updateStatus(id,"COOKING");
-      }
       if(action==="send-wa")        sendReadyWA(order);
       if(action==="send-receipt")   sendReceiptWA(order);
       if(action==="delete-order")   deleteOrder(id,btn.dataset.label);
@@ -889,40 +957,42 @@ function buildCard(o) {
       <span class="text-slate-500 font-mono">${fmt((i.price||0)*(i.qty||0))}</span>
     </div>`).join("");
 
-  // FIX B8: READY card gets "Proses Bayar" (POS) instead of "Selesaikan"
+  // ── Tombol aksi per status ──────────────────────────────────
+  // NEW: Proses Masak → otomatis print KOT via action handler
+  // COOKING: Tandai Siap
+  // READY: Hubungi WA (panggil ambil) + Proses Bayar (POS)
+  // DONE: Kirim Nota + Arsipkan
+
   let actionBtn="";
   if(o.orderStatus==="NEW")
-    actionBtn=`<button data-action="start-cooking" data-id="${o.id}" class="act-btn act-btn--amber">▶ Mulai Masak</button>`;
+    actionBtn=`<button data-action="start-cooking" data-id="${o.id}" class="act-btn act-btn--amber">
+      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>
+      Proses Masak
+    </button>`;
   else if(o.orderStatus==="COOKING")
-    actionBtn=`<button data-action="mark-ready" data-id="${o.id}" class="act-btn act-btn--green">✔ Tandai Siap</button>`;
-  else if(o.orderStatus==="READY")
-    actionBtn=`<button data-action="open-pos" data-id="${o.id}" class="act-btn act-btn--pos">
-      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/></svg>
-      Proses Bayar
+    actionBtn=`<button data-action="mark-ready" data-id="${o.id}" class="act-btn act-btn--green">
+      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
+      Tandai Siap
     </button>`;
 
-  // KOT button — tampil di NEW dan COOKING
-  const kotBtn = (o.orderStatus==="NEW"||o.orderStatus==="COOKING")
-    ? `<button data-action="print-kot" data-id="${o.id}"
-         class="act-btn act-btn--kot" title="Print Kitchen Order Ticket ke printer thermal">
-         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-           <path stroke-linecap="round" stroke-linejoin="round" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/>
-         </svg>
-         KOT
-       </button>`
-    : "";
-
-  // WA button — only for READY (notification), DONE has receipt button
+  // READY: dua tombol — Hubungi WA dulu, lalu Proses Bayar
   const waBtn = o.orderStatus==="READY"
     ? `<button data-action="send-wa" data-id="${o.id}" class="act-btn act-btn--wa${o.whatsappSent?" opacity-60":""}">
         <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/><path d="M12 0C5.373 0 0 5.373 0 12c0 2.127.558 4.126 1.533 5.858L0 24l6.335-1.502A11.955 11.955 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 22c-1.853 0-3.585-.5-5.082-1.373l-.362-.217-3.761.892.952-3.669-.239-.381A9.955 9.955 0 012 12C2 6.477 6.477 2 12 2s10 4.477 10 10-4.477 10-10 10z"/></svg>
-        ${o.whatsappSent?"Terkirim":"Panggil WA"}
+        ${o.whatsappSent?"✓ Terpanggil":"📞 Hubungi WA"}
+      </button>
+      <button data-action="open-pos" data-id="${o.id}" class="act-btn act-btn--pos">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/></svg>
+        Proses Bayar
       </button>`
     : "";
 
-
-  // DONE card: hanya tombol hapus
+  // DONE: Kirim Nota + Arsipkan
   const doneActions = o.orderStatus==="DONE" ? `
+    <button data-action="send-receipt" data-id="${o.id}" class="act-btn act-btn--wa${o.receiptSent?" opacity-60":""}">
+      <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/><path d="M12 0C5.373 0 0 5.373 0 12c0 2.127.558 4.126 1.533 5.858L0 24l6.335-1.502A11.955 11.955 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 22c-1.853 0-3.585-.5-5.082-1.373l-.362-.217-3.761.892.952-3.669-.239-.381A9.955 9.955 0 012 12C2 6.477 6.477 2 12 2s10 4.477 10 10-4.477 10-10 10z"/></svg>
+      ${o.receiptSent?"✓ Nota Terkirim":"Kirim Nota WA"}
+    </button>
     <button data-action="delete-order" data-id="${o.id}" data-label="${o.orderId||o.id}" class="act-btn act-btn--delete ml-auto">
       <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8l1 12a2 2 0 002 2h8a2 2 0 002-2L19 8m-9 4v4m4-4v4"/></svg>
       Arsipkan
@@ -2532,6 +2602,12 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);}
 .act-btn--pos{background:linear-gradient(135deg,var(--orange),var(--orange2));color:#fff;border:none;box-shadow:0 2px 8px rgba(234,88,12,.25);}.act-btn--pos:hover{opacity:.9;}
 /* Search result info */
 #search-result-info{font-size:12px;color:var(--text3);margin-bottom:8px;display:none;font-weight:600;}
+
+/* Cash POS input */
+.pos-cash-inp{background:#fff;border:1.5px solid #cbd5e1;border-radius:9px;padding:10px 12px;font-size:16px;font-weight:700;font-family:'DM Mono',monospace;color:#0f172a;outline:none;transition:border-color .15s;}
+.pos-cash-inp:focus{border-color:#ea580c;}
+.pos-quick-btn{padding:6px 12px;background:#fff;border:1.5px solid #e2e8f0;border-radius:8px;font-size:12px;font-weight:700;font-family:'Plus Jakarta Sans',sans-serif;color:#475569;cursor:pointer;transition:all .15s;}
+.pos-quick-btn:hover{background:#fff7ed;border-color:#fed7aa;color:#92400e;}
 </style>
 
 </head>
@@ -2768,19 +2844,40 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);}
         <div class="pos-section__label">💰 Rincian Harga</div>
         <div class="pos-total-row"><span>Subtotal</span><span id="pos-subtotal">-</span></div>
         <div id="pos-fee-row" class="pos-total-row" style="display:none"><span id="pos-fee-label">Service fee</span><span id="pos-fee-amount">-</span></div>
-        <div class="pos-total-row pos-total-row--grand"><span>TOTAL</span><span id="pos-total">-</span></div>
+        <div class="pos-total-row pos-total-row--grand"><span>TOTAL</span><span id="pos-total-val">-</span></div>
       </div>
       <div class="pos-section" style="border-bottom:none">
         <div class="pos-section__label flex items-center justify-between">
           <span>💳 Metode Pembayaran</span>
           <span id="pos-payment-status" class="pos-pay-status pos-pay-unpaid">UNPAID</span>
         </div>
-        <select id="pos-payment-method" class="pos-select">
+        <select id="pos-payment-method" class="pos-select" onchange="onPOSPayMethodChange()">
           <option value="Cash">💵 Cash — Bayar Tunai</option>
           <option value="QRIS">📱 QRIS — Scan QR</option>
           <option value="Transfer">🏦 Transfer Bank</option>
           <option value="Debit">💳 Kartu Debit</option>
         </select>
+
+        <!-- Cash input + kembalian (hanya tampil untuk Cash) -->
+        <div id="pos-cash-section" class="mt-3 p-3 bg-slate-50 border border-slate-200 rounded-xl">
+          <div class="flex items-center gap-3">
+            <div class="flex-1">
+              <label class="text-[10px] font-bold text-slate-400 uppercase tracking-wide">Uang Diterima (Rp)</label>
+              <input id="pos-cash-input" type="number" min="0" step="1000"
+                placeholder="cth: 50000"
+                class="pos-cash-inp mt-1 w-full"
+                oninput="updateKembalian()"
+                onkeydown="if(event.key==='Enter')confirmPOS()"/>
+            </div>
+            <div class="text-right flex-shrink-0">
+              <div class="text-[10px] font-bold text-slate-400 uppercase tracking-wide">Kembalian</div>
+              <div id="pos-kembalian" class="text-xl font-black mt-1" style="color:#94a3b8">-</div>
+            </div>
+          </div>
+          <!-- Quick cash buttons -->
+          <div class="flex gap-2 mt-2 flex-wrap" id="pos-quick-cash"></div>
+        </div>
+
         <div class="mt-2 text-xs text-slate-400">Setelah konfirmasi: order → <strong>Selesai</strong>, payment → <strong>PAID</strong>, nota WA terkirim.</div>
       </div>
       <div class="pos-footer">
