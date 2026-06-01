@@ -599,7 +599,9 @@ async function confirmPOS() {
       orderStatus:"DONE",paymentStatus:"PAID",paymentMethod:pm,
       paidAt:serverTimestamp(),updatedAt:serverTimestamp(),completedAt:serverTimestamp(),...extra,
     });
-    sendReceiptWA({...posOrder,paymentMethod:pm,paymentStatus:"PAID",...extra});
+    const receiptOrder={...posOrder,paymentMethod:pm,paymentStatus:"PAID",...extra};
+    sendReceiptWA(receiptOrder);  // WA nota
+    printNota(receiptOrder);      // Cetak nota fisik via RawBT
     showToast("✅ Pembayaran dikonfirmasi — Nota WA terkirim!","success");
     closePOS();
   } catch(e){
@@ -625,6 +627,110 @@ function sendReadyWA(order) {
   window.open(`https://wa.me/${phone}?text=${msg}`,"_blank");
   updateDoc(doc(db,"orders",order.id),{whatsappSent:true}).catch(()=>{});
 }
+
+
+// ── Print Nota Fisik via RawBT ───────────────────────────────
+// Dipanggil berbarengan dengan kirim WA receipt
+function printNota(order) {
+  const now   = new Date();
+  const jam   = now.toLocaleTimeString("id-ID", {hour:"2-digit", minute:"2-digit"});
+  const tgl   = now.toLocaleDateString("id-ID",  {day:"2-digit", month:"long", year:"numeric"});
+  const store = appSettings.storeName || "Sawah Senja";
+  const W     = 32;
+
+  function center(str) {
+    str = String(str).slice(0, W);
+    var pad = Math.floor((W - str.length) / 2);
+    return " ".repeat(Math.max(0, pad)) + str;
+  }
+  function row(label, value, bold) {
+    var v = String(value||"");
+    return label + v;
+  }
+  function sep(ch) { return (ch||"-").repeat(W); }
+
+  const subtotal = order.subtotal||0;
+  const fee      = order.serviceFee||0;
+  const total    = order.total||0;
+  const feeLabel = order.serviceFeeLabel||appSettings.serviceFeeLabel||"Service fee";
+
+  var lines = [];
+  lines.push("");
+  lines.push(center(store.toUpperCase()));
+  lines.push(center(appSettings.storeAddress||""));
+  lines.push(center(appSettings.storePhone||""));
+  lines.push(sep("="));
+  lines.push(center("NOTA TRANSAKSI"));
+  lines.push(sep("="));
+  lines.push(row("No Order : ", order.orderId||"-"));
+  lines.push(row("Tanggal  : ", tgl));
+  lines.push(row("Jam      : ", jam));
+  lines.push(row("Area     : ", order.areaCode||"-"));
+  lines.push(row("Customer : ", (order.customerName||"-").slice(0,20)));
+  lines.push(row("Kasir    : ", currentUser?.email?.split("@")[0]||"Staff"));
+  lines.push(sep("-"));
+  lines.push(center("PESANAN"));
+  lines.push(sep("-"));
+  (order.items||[]).forEach(function(i) {
+    var prefix = String(i.qty).padStart(2) + "x " + i.name;
+    var price  = "Rp " + Number((i.price||0)*(i.qty||0)).toLocaleString("id-ID");
+    // Rata kanan harga
+    var space  = W - prefix.length - price.length;
+    if(space > 0) lines.push(prefix + " ".repeat(space) + price);
+    else {
+      lines.push(prefix.slice(0, W));
+      lines.push(" ".repeat(W - price.length) + price);
+    }
+    if(i.notes) lines.push("  >> " + i.notes.slice(0, W-5));
+  });
+  lines.push(sep("-"));
+  // Subtotal
+  var subStr = "Rp " + Number(subtotal).toLocaleString("id-ID");
+  lines.push("Subtotal" + " ".repeat(W-8-subStr.length) + subStr);
+  // Fee
+  if(fee>0){
+    var feeStr = "Rp " + Number(fee).toLocaleString("id-ID");
+    var lbl = feeLabel.slice(0,W-feeStr.length-1);
+    lines.push(lbl + " ".repeat(W-lbl.length-feeStr.length) + feeStr);
+  }
+  lines.push(sep("="));
+  var totStr = "Rp " + Number(total).toLocaleString("id-ID");
+  lines.push("TOTAL" + " ".repeat(W-5-totStr.length) + totStr);
+  lines.push(sep("="));
+  lines.push(row("Bayar    : ", order.paymentMethod||"-"));
+  if(order.cashPaid){
+    var cpStr  = "Rp " + Number(order.cashPaid).toLocaleString("id-ID");
+    var chgStr = "Rp " + Number(order.cashChange||0).toLocaleString("id-ID");
+    lines.push("Tunai" + " ".repeat(W-5-cpStr.length) + cpStr);
+    lines.push("Kembali" + " ".repeat(W-7-chgStr.length) + chgStr);
+  }
+  lines.push(sep("="));
+  lines.push(center("** LUNAS **"));
+  lines.push(sep("="));
+  lines.push(center(appSettings.receiptFooter||"Terima kasih!"));
+  lines.push("");
+  lines.push("");
+  lines.push("");
+
+  var txt = lines.join("\n");
+
+  // Kirim ke RawBT
+  try {
+    var encoded = encodeURIComponent(txt);
+    var intentUrl = "intent://rawbt?printer=sawahsenja&text=" + encoded
+      + "#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end";
+    var a = document.createElement("a");
+    a.href = intentUrl;
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function(){ document.body.removeChild(a); }, 1000);
+    showToast("🖨 Nota dikirim ke printer…", "info");
+  } catch(e) {
+    console.error("printNota error:", e);
+  }
+}
+window.printNota = printNota;
 
 function sendReceiptWA(order) {
   const phone=String(order.customerWhatsapp).replace(/\D/g,"");
@@ -678,7 +784,7 @@ function printKOT(order) {
   const jam   = now.toLocaleTimeString("id-ID", {hour:"2-digit", minute:"2-digit"});
   const tgl   = now.toLocaleDateString("id-ID",  {day:"2-digit", month:"2-digit", year:"2-digit"});
   const store = appSettings.storeName || "Sawah Senja";
-  const W     = 32; // lebar 58mm = 32 karakter
+  const W     = 32;
 
   function center(str) {
     str = String(str).slice(0, W);
@@ -686,12 +792,11 @@ function printKOT(order) {
     return " ".repeat(Math.max(0, pad)) + str;
   }
   function left(label, value) {
-    var row = label + String(value);
-    return row.slice(0, W);
+    return (label + String(value)).slice(0, W);
   }
   function sep(ch) { return (ch||"-").repeat(W); }
 
-  // Build teks KOT
+  // ── Build teks KOT ──────────────────────────────────────────
   var lines = [];
   lines.push("");
   lines.push(center("KITCHEN ORDER TICKET"));
@@ -700,7 +805,8 @@ function printKOT(order) {
   lines.push(left("No  : ", order.orderId   || "-"));
   lines.push(left("Area: ", order.areaCode  || "-"));
   lines.push(left("Jam : ", jam + "  " + tgl));
-  lines.push(left("Tamu: ", (order.customerName||"-").slice(0, 24)));
+  lines.push(left("Tamu: ", (order.customerName||"-").slice(0, 22)));
+  lines.push(left("WA  : ", (order.customerWhatsapp||"-").slice(0, 22)));
   lines.push(sep("="));
   lines.push(center("*** DAFTAR MASAK ***"));
   lines.push(sep("-"));
@@ -712,78 +818,104 @@ function printKOT(order) {
     if (i.notes) lines.push("   >> " + i.notes.slice(0, W-6));
   });
   lines.push(sep("-"));
-  lines.push(center("SEGERA DIPROSES"));
+  lines.push(center("** SEGERA DIPROSES **"));
+  lines.push("");
   lines.push("");
   lines.push("");
 
   var txt = lines.join("\n");
 
-  // ── Copy ke clipboard ──
-  function doCopy() {
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(txt).then(function() {
-        showKotModal(txt);
-      }).catch(function() {
-        fallbackCopy(txt);
-      });
-    } else {
-      fallbackCopy(txt);
+  // ── Coba RawBT intent dulu (otomatis, tanpa copy-paste) ─────
+  // RawBT printer name: sawahsenja (sesuai foto pengaturan)
+  function tryRawBT() {
+    try {
+      // RawBT mendukung intent URL dengan parameter text
+      // Encode teks dan arahkan ke RawBT
+      var encoded = encodeURIComponent(txt);
+      var intentUrl = "intent://rawbt?printer=sawahsenja&text=" + encoded
+        + "#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end";
+
+      // Buat link tersembunyi dan klik — ini trigger RawBT di Android
+      var a = document.createElement("a");
+      a.href = intentUrl;
+      a.style.display = "none";
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(function() {
+        document.body.removeChild(a);
+      }, 1000);
+
+      // Tampilkan toast konfirmasi (bukan modal — lebih cepat)
+      showToast("🖨 KOT dikirim ke printer…", "info");
+
+      // Fallback: jika 3 detik tidak ada respons, tawarkan manual
+      setTimeout(function() {
+        // Jika RawBT tidak handle intent, user masih bisa manual
+      }, 3000);
+
+    } catch(e) {
+      // Fallback ke modal copy-paste
+      showKotFallback(txt);
     }
   }
 
-  function fallbackCopy(text) {
-    var ta = document.createElement("textarea");
-    ta.value = text;
-    ta.style.cssText = "position:fixed;top:0;left:0;opacity:0;font-size:16px;";
-    document.body.appendChild(ta);
-    ta.focus(); ta.select();
-    try { document.execCommand("copy"); } catch(e) {}
-    document.body.removeChild(ta);
-    showKotModal(text);
-  }
-
-  function showKotModal(text) {
-    // Hapus modal lama
+  // ── Fallback modal (jika RawBT gagal / tidak install) ───────
+  function showKotFallback(text) {
     var old = document.getElementById("__kot_modal__");
     if (old) old.parentNode.removeChild(old);
+
+    // Copy ke clipboard dulu
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).catch(function(){});
+    } else {
+      var ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.cssText = "position:fixed;top:0;left:0;opacity:0;font-size:16px;";
+      document.body.appendChild(ta);
+      ta.focus(); ta.select();
+      try { document.execCommand("copy"); } catch(e2) {}
+      document.body.removeChild(ta);
+    }
 
     var modal = document.createElement("div");
     modal.id = "__kot_modal__";
     modal.style.cssText = "position:fixed;inset:0;z-index:99990;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;padding:16px;";
-
     modal.innerHTML =
       '<div style="background:#fff;border-radius:16px;width:100%;max-width:400px;overflow:hidden;box-shadow:0 24px 64px rgba(0,0,0,0.3);">'
-      + '<div style="background:#7c3aed;padding:16px 20px;display:flex;justify-content:space-between;align-items:center;">'
-      +   '<div style="color:#fff;font-weight:800;font-size:15px;">🖨 Print KOT ke BluePrint</div>'
+      + '<div style="background:#dc2626;padding:14px 20px;display:flex;justify-content:space-between;align-items:center;">'
+      +   '<div style="color:#fff;font-weight:800;font-size:14px;">⚠ RawBT tidak merespons</div>'
       +   '<button onclick="document.getElementById(\'__kot_modal__\').remove()" style="color:#fff;background:rgba(255,255,255,0.2);border:none;border-radius:8px;padding:4px 10px;font-size:16px;cursor:pointer;">✕</button>'
       + '</div>'
       + '<div style="padding:16px 20px;">'
-      +   '<div style="background:#f0fdf4;border:1px solid #86efac;border-radius:10px;padding:12px 14px;margin-bottom:14px;">'
-      +     '<div style="font-weight:700;color:#166534;font-size:13px;margin-bottom:6px;">✅ Teks KOT sudah disalin!</div>'
-      +     '<div style="font-size:12px;color:#166534;line-height:1.5;">Langkah:<br/>1. Tap <b>Buka BluePrint</b> di bawah<br/>2. Di BluePrint pilih <b>Text</b> → <b>Paste</b><br/>3. Tap <b>Print</b></div>'
+      +   '<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:12px 14px;margin-bottom:14px;font-size:12px;color:#dc2626;line-height:1.6;">'
+      +     '1. Pastikan app <b>RawBT</b> sudah terbuka di background<br/>'
+      +     '2. Cek printer "<b>printerSS</b>" sudah dipilih di RawBT<br/>'
+      +     '3. Atau copy teks di bawah → paste di RawBT'
       +   '</div>'
-      +   '<pre style="background:#1e293b;color:#e2e8f0;border-radius:10px;padding:12px;font-size:11px;font-family:monospace;overflow-x:auto;white-space:pre;max-height:200px;overflow-y:auto;">'
+      +   '<pre style="background:#1e293b;color:#e2e8f0;border-radius:10px;padding:12px;font-size:10px;font-family:monospace;overflow-x:auto;white-space:pre;max-height:180px;overflow-y:auto;">'
       +   text.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
       +   '</pre>'
       + '</div>'
       + '<div style="padding:0 20px 20px;display:flex;gap:10px;">'
-      +   '<a href="intent://com.hardiyosodev.bluetooth_printer#Intent;scheme=blueprint;end" style="flex:1;background:#7c3aed;color:#fff;text-decoration:none;text-align:center;padding:13px;border-radius:12px;font-weight:800;font-size:14px;display:block;">Buka BluePrint →</a>'
+      +   '<a href="intent://rawbt#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end" '
+      +      'style="flex:1;background:#2563eb;color:#fff;text-decoration:none;text-align:center;padding:12px;border-radius:12px;font-weight:800;font-size:13px;display:block;">Buka RawBT →</a>'
       +   '<button onclick="'
-      +     'if(navigator.clipboard){navigator.clipboard.writeText(' + JSON.stringify(txt) + ')}'
-      +     ';this.textContent=\'✓ Disalin\';setTimeout(()=>this.textContent=\'📋 Copy Lagi\',1500)"'
-      +     ' style="background:#f1f5f9;border:1.5px solid #e2e8f0;border-radius:12px;padding:13px 16px;font-weight:700;font-size:13px;cursor:pointer;color:#475569;">📋 Copy Lagi</button>'
+      +     'if(navigator.clipboard){navigator.clipboard.writeText(' + JSON.stringify(txt).replace(/\\/g,'\\\\') + ')}'
+      +     ';this.textContent=\'✓ Disalin\';setTimeout(()=>this.textContent=\'📋 Copy\',1500)"'
+      +     ' style="background:#f1f5f9;border:1.5px solid #e2e8f0;border-radius:12px;padding:12px 16px;font-weight:700;font-size:13px;cursor:pointer;color:#475569;">📋 Copy</button>'
       + '</div>'
       + '</div>';
 
     document.body.appendChild(modal);
-    // Tap luar untuk tutup
     modal.addEventListener("click", function(e) {
       if (e.target === modal) modal.remove();
     });
   }
 
-  doCopy();
+  // ── Jalankan ─────────────────────────────────────────────────
+  tryRawBT();
 }
+
 window.printKOT = printKOT;
 
 // ─────────────────────────────────────────────────────────────
