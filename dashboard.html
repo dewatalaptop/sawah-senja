@@ -523,7 +523,6 @@ function openPOS(order) {
   if(cashIn) { cashIn.value=""; updateKembalian(); }
 
   // Quick cash buttons: bilangan bulat di atas total
-  const total=order.total||0;
   const qcEl=document.getElementById("pos-quick-cash");
   if(qcEl){
     const rounds=[5000,10000,20000,50000,100000];
@@ -899,14 +898,34 @@ function printKOT(order) {
       + '<div style="padding:0 20px 20px;display:flex;gap:10px;">'
       +   '<a href="intent://rawbt#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end" '
       +      'style="flex:1;background:#2563eb;color:#fff;text-decoration:none;text-align:center;padding:12px;border-radius:12px;font-weight:800;font-size:13px;display:block;">Buka RawBT →</a>'
-      +   '<button onclick="'
-      +     'if(navigator.clipboard){navigator.clipboard.writeText(' + JSON.stringify(txt).replace(/\\/g,'\\\\') + ')}'
-      +     ';this.textContent=\'✓ Disalin\';setTimeout(()=>this.textContent=\'📋 Copy\',1500)"'
-      +     ' style="background:#f1f5f9;border:1.5px solid #e2e8f0;border-radius:12px;padding:12px 16px;font-weight:700;font-size:13px;cursor:pointer;color:#475569;">📋 Copy</button>'
+      +   '<button id="__kot_copy_btn__" '
+      +     'style="background:#f1f5f9;border:1.5px solid #e2e8f0;border-radius:12px;padding:12px 16px;font-weight:700;font-size:13px;cursor:pointer;color:#475569;">📋 Copy</button>'
       + '</div>'
       + '</div>';
 
     document.body.appendChild(modal);
+
+    // Copy button — aman untuk iOS Safari (tidak pakai inline onclick)
+    var copyBtn = document.getElementById("__kot_copy_btn__");
+    if(copyBtn) {
+      copyBtn.addEventListener("click", function() {
+        if(navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(function(){
+            copyBtn.textContent = "✓ Disalin";
+            setTimeout(function(){ copyBtn.textContent = "📋 Copy"; }, 1500);
+          }).catch(function(){});
+        } else {
+          var ta = document.createElement("textarea");
+          ta.value = text; ta.style.cssText = "position:fixed;top:0;left:0;opacity:0;font-size:16px;";
+          document.body.appendChild(ta); ta.focus(); ta.select();
+          try { document.execCommand("copy"); } catch(e2) {}
+          document.body.removeChild(ta);
+          copyBtn.textContent = "✓ Disalin";
+          setTimeout(function(){ copyBtn.textContent = "📋 Copy"; }, 1500);
+        }
+      });
+    }
+
     modal.addEventListener("click", function(e) {
       if (e.target === modal) modal.remove();
     });
