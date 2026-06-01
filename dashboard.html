@@ -195,6 +195,7 @@ let unsubOrders=null, unsubMenu=null, unsubSettings=null;
 let knownOrderIds=new Set(), audioCtx=null;
 let menuItems=[], activeTab="orders";
 let menuEditTarget=null, menuModalOpen=false;
+let posModalOpen=false, posOrder=null;
 
 let currentUser=null, domReady=false, pendingAuthUser=undefined;
 
@@ -478,6 +479,130 @@ async function deleteAllDone() {
 window.deleteAllDone=deleteAllDone;
 
 // ─────────────────────────────────────────────────────────────
+// POS — Proses Pembayaran
+// ─────────────────────────────────────────────────────────────
+function calcOrderFee(order) { return order.serviceFee || 0; }
+
+function openPOS(order) {
+  posOrder=order; posModalOpen=true;
+  document.getElementById("pos-order-id").textContent  = order.orderId||"-";
+  document.getElementById("pos-customer").textContent  = order.customerName||"-";
+  document.getElementById("pos-area").textContent      = order.areaCode||"-";
+  document.getElementById("pos-phone").textContent     = order.customerWhatsapp||"-";
+  const itemsHtml=(order.items||[]).map(i=>
+    `<div class="pos-item-row"><div class="pos-item-name">${i.qty}× ${i.name}${i.notes?` <span class="pos-item-note">(${i.notes})</span>`:""}</div><div class="pos-item-price">${fmt((i.price||0)*(i.qty||0))}</div></div>`
+  ).join("");
+  document.getElementById("pos-items-list").innerHTML=itemsHtml;
+  const subtotal=order.subtotal||0;
+  const fee=calcOrderFee(order);
+  const total=order.total||0;
+  document.getElementById("pos-subtotal").textContent=fmt(subtotal);
+  const feeRow=document.getElementById("pos-fee-row");
+  if(fee>0){
+    feeRow.style.display="flex";
+    document.getElementById("pos-fee-label").textContent=order.serviceFeeLabel||appSettings.serviceFeeLabel||"Service fee";
+    document.getElementById("pos-fee-amount").textContent=fmt(fee);
+  } else { feeRow.style.display="none"; }
+  document.getElementById("pos-total").textContent=fmt(total);
+  const pmSel=document.getElementById("pos-payment-method");
+  if(pmSel) pmSel.value=order.paymentMethod||"Cash";
+  const statusEl=document.getElementById("pos-payment-status");
+  if(statusEl){
+    statusEl.textContent=order.paymentStatus||"UNPAID";
+    statusEl.className="pos-pay-status "+(order.paymentStatus==="PAID"?"pos-pay-paid":order.paymentStatus==="PENDING"?"pos-pay-pending":"pos-pay-unpaid");
+  }
+  const modal=document.getElementById("pos-modal");
+  modal.classList.remove("hidden");
+  requestAnimationFrame(()=>modal.classList.add("pos-modal-visible"));
+}
+function closePOS() {
+  const modal=document.getElementById("pos-modal");
+  modal.classList.remove("pos-modal-visible");
+  setTimeout(()=>modal.classList.add("hidden"),220);
+  posOrder=null; posModalOpen=false;
+}
+async function confirmPOS() {
+  if(!posOrder) return;
+  const btn=document.getElementById("btn-pos-confirm");
+  const pm=document.getElementById("pos-payment-method")?.value||"Cash";
+  if(btn){btn.disabled=true; btn.textContent="Memproses…";}
+  try {
+    await updateDoc(doc(db,"orders",posOrder.id),{
+      orderStatus:"DONE", paymentStatus:"PAID", paymentMethod:pm,
+      paidAt:serverTimestamp(), updatedAt:serverTimestamp(), completedAt:serverTimestamp(),
+    });
+    sendReceiptWA({...posOrder, paymentMethod:pm, paymentStatus:"PAID"});
+    showToast("Pembayaran dikonfirmasi — Nota terkirim!","success");
+    closePOS();
+  } catch(e){
+    console.error(e);
+    showToast("Gagal konfirmasi: "+e.message,"error");
+    if(btn){btn.disabled=false; btn.textContent="Konfirmasi & Kirim Nota";}
+  }
+}
+window.confirmPOS=confirmPOS;
+window.closePOS=closePOS;
+window.openPOS=openPOS;
+
+function sendReadyWA(order) {
+  const phone=String(order.customerWhatsapp).replace(/\D/g,"");
+  const itemLines=(order.items||[]).map(i=>`  • ${i.qty}× ${i.name}${i.notes?` _(${i.notes})_`:""}`).join("\n");
+  const msg=encodeURIComponent(
+    `Halo *${order.customerName}* 👋\n\n`+
+    `Pesanan *#${order.orderId}* sudah *siap diambil!* 🌾\n\n`+
+    `${itemLines}\n\n`+
+    `Silakan menuju pickup counter kami.\n`+
+    `Pembayaran: *${order.paymentMethod||"-"}*\n\n`+
+    `_${appSettings.storeName||"Sawah Senja"}_`
+  );
+  window.open(`https://wa.me/${phone}?text=${msg}`,"_blank");
+  updateDoc(doc(db,"orders",order.id),{whatsappSent:true}).catch(()=>{});
+}
+
+function sendReceiptWA(order) {
+  const phone=String(order.customerWhatsapp).replace(/\D/g,"");
+  const now=new Date();
+  const tgl=now.toLocaleDateString("id-ID",{day:"2-digit",month:"long",year:"numeric"});
+  const jam=now.toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"});
+  const subtotal=order.subtotal||0;
+  const fee=calcOrderFee(order);
+  const total=order.total||0;
+  const feeLabel=order.serviceFeeLabel||appSettings.serviceFeeLabel||"Service fee";
+  const itemLines=(order.items||[]).map(i=>`${i.qty}× ${i.name}\n   └ ${fmt((i.price||0)*(i.qty||0))}`).join("\n");
+  const SEP="─────────────────────";
+  const storeName=(appSettings.storeName||"Sawah Senja").toUpperCase();
+  const receipt=
+`╔═══════════════════════╗
+║   *${storeName.padEnd(20)}*  ║
+╚═══════════════════════╝
+
+📋 *NOTA TRANSAKSI*
+${SEP}
+No. Order : *${order.orderId}*
+Tanggal   : ${tgl}
+Jam       : ${jam}
+Area      : ${order.areaCode||"-"}
+Kasir     : ${currentUser?.email?.split("@")[0]||"Staff"}
+${SEP}
+
+*PESANAN:*
+${itemLines}
+
+${SEP}
+Subtotal  : ${fmt(subtotal)}${fee>0?`\n${feeLabel.padEnd(10)}: ${fmt(fee)}`:""}
+*TOTAL    : ${fmt(total)}*
+${SEP}
+Pembayaran: *${order.paymentMethod||"-"}*
+Status    : ✅ *LUNAS*
+${SEP}
+
+${appSettings.receiptFooter||"Terima kasih sudah makan di Sawah Senja 🌾"}${appSettings.storeAddress?`\n📍 ${appSettings.storeAddress}`:""}${appSettings.storePhone?`\n📞 ${appSettings.storePhone}`:""}`;
+  window.open(`https://wa.me/${phone}?text=${encodeURIComponent(receipt)}`,"_blank");
+  updateDoc(doc(db,"orders",order.id),{receiptSent:true}).catch(()=>{});
+}
+
+
+// ─────────────────────────────────────────────────────────────
 // KOT — Kitchen Order Ticket (cetak ke printer thermal dapur)
 // ─────────────────────────────────────────────────────────────
 function printKOT(order) {
@@ -657,11 +782,17 @@ function getFilteredOrders() {
   if(activeFilter!=="ALL") list=list.filter(o=>o.orderStatus===activeFilter);
   if(searchQuery.trim()){
     const q=searchQuery.toLowerCase();
-    list=list.filter(o=>
-      (o.orderId||"").toLowerCase().includes(q)||
-      (o.customerName||"").toLowerCase().includes(q)||
-      (o.areaCode||"").toLowerCase().includes(q)
-    );
+    list=list.filter(o=>{
+      // Cari di: orderId, nama, nomor WA, area, item names
+      const haystack=[
+        o.orderId||"",
+        o.customerName||"",
+        o.customerWhatsapp||"",
+        o.areaCode||"",
+        ...(o.items||[]).map(i=>i.name||"")
+      ].join(" ").toLowerCase();
+      return haystack.includes(q);
+    });
   }
   list.sort((a,b)=>{
     const sd=(STATUS_ORDER[a.orderStatus]??99)-(STATUS_ORDER[b.orderStatus]??99);
@@ -713,6 +844,16 @@ function renderOrders() {
   if(!grid) return;
   skel?.classList.add("hidden");
   const list=getFilteredOrders();
+  // Smart search: tampilkan jumlah hasil
+  const searchInfo=document.getElementById("search-result-info");
+  if(searchInfo){
+    if(searchQuery.trim()&&list.length>0){
+      searchInfo.textContent=`${list.length} hasil untuk "${searchQuery}"`;
+      searchInfo.style.display="block";
+    } else {
+      searchInfo.style.display="none";
+    }
+  }
   if(list.length===0){ grid.innerHTML=""; empty.style.display="flex"; return; }
   empty.style.display="none";
   grid.innerHTML=list.map(buildCard).join("");
@@ -724,12 +865,13 @@ function renderOrders() {
       if(!order) return;
       if(action==="start-cooking")  updateStatus(id,"COOKING");
       if(action==="mark-ready")     updateStatus(id,"READY");
-      if(action==="mark-done")      updateStatus(id,"DONE");
+      if(action==="open-pos")       openPOS(order);
       if(action==="print-kot") {
         printKOT(order);
         if(order.orderStatus==="NEW") updateStatus(id,"COOKING");
       }
       if(action==="send-wa")        sendReadyWA(order);
+      if(action==="send-receipt")   sendReceiptWA(order);
       if(action==="delete-order")   deleteOrder(id,btn.dataset.label);
     });
   });
@@ -754,9 +896,9 @@ function buildCard(o) {
   else if(o.orderStatus==="COOKING")
     actionBtn=`<button data-action="mark-ready" data-id="${o.id}" class="act-btn act-btn--green">✔ Tandai Siap</button>`;
   else if(o.orderStatus==="READY")
-    actionBtn=`<button data-action="mark-done" data-id="${o.id}" class="act-btn act-btn--green">
-      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
-      Selesai
+    actionBtn=`<button data-action="open-pos" data-id="${o.id}" class="act-btn act-btn--pos">
+      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/></svg>
+      Proses Bayar
     </button>`;
 
   // KOT button — tampil di NEW dan COOKING
@@ -1961,7 +2103,16 @@ document.addEventListener("DOMContentLoaded",()=>{
     });
   });
 
-  document.getElementById("search-input").addEventListener("input",e=>{ searchQuery=e.target.value; renderOrders(); });
+  // Smart search: debounce 300ms + search across orderId, nama, WA, area, items
+let _searchDebounce=null;
+document.getElementById("search-input").addEventListener("input",e=>{
+  clearTimeout(_searchDebounce);
+  _searchDebounce=setTimeout(()=>{ searchQuery=e.target.value; renderOrders(); },300);
+});
+// ESC to clear search
+document.getElementById("search-input").addEventListener("keydown",e=>{
+  if(e.key==="Escape"){ e.target.value=""; searchQuery=""; renderOrders(); }
+});
   document.getElementById("tab-orders").addEventListener("click",()=>switchTab("orders"));
   document.getElementById("tab-menu").addEventListener("click",()=>switchTab("menu"));
   document.getElementById("tab-report").addEventListener("click",()=>switchTab("report"));
@@ -1990,8 +2141,13 @@ document.addEventListener("DOMContentLoaded",()=>{
   });
 
 
+  document.getElementById("pos-modal-backdrop")?.addEventListener("click", closePOS);
+
   document.addEventListener("keydown",e=>{
-    if(e.key==="Escape" && menuModalOpen) closeMenuModal();
+    if(e.key==="Escape"){
+      if(posModalOpen) closePOS();
+      else if(menuModalOpen) closeMenuModal();
+    }
   });
 });
 </script>
@@ -2343,6 +2499,39 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);}
 /* ── PULSE ── */
 .pulse-dot{animation:pulseDot 2s infinite;}
 @keyframes pulseDot{0%,100%{opacity:1;}50%{opacity:.4;}}
+
+/* ── POS MODAL ── */
+#pos-modal{opacity:0;transition:opacity .22s;}
+#pos-modal.pos-modal-visible{opacity:1;}
+.pos-panel{background:#fff;border-radius:20px;width:100%;max-width:480px;max-height:92dvh;overflow-y:auto;box-shadow:0 24px 64px rgba(0,0,0,.15);}
+.pos-header{background:linear-gradient(135deg,var(--orange),var(--orange2));padding:20px 24px;border-radius:20px 20px 0 0;color:#fff;}
+.pos-header__title{font-size:18px;font-weight:800;}
+.pos-header__sub{font-size:12px;opacity:.85;margin-top:2px;}
+.pos-section{padding:14px 24px;border-bottom:1px solid var(--border);}
+.pos-section__label{font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;}
+.pos-item-row{display:flex;justify-content:space-between;align-items:baseline;padding:3px 0;}
+.pos-item-name{font-size:13px;color:var(--text);font-weight:500;}
+.pos-item-note{font-size:11px;color:var(--text3);font-style:italic;}
+.pos-item-price{font-family:var(--font-mono);font-size:13px;color:var(--text2);flex-shrink:0;margin-left:8px;}
+.pos-total-row{display:flex;justify-content:space-between;font-size:14px;color:var(--text2);padding:3px 0;}
+.pos-total-row--grand{font-size:20px;font-weight:900;color:var(--text);padding-top:8px;border-top:2px solid var(--border2);margin-top:4px;}
+.pos-pay-status{display:inline-flex;font-size:11px;font-weight:700;padding:3px 9px;border-radius:100px;}
+.pos-pay-paid{background:#d1fae5;color:#059669;}
+.pos-pay-pending{background:#fef3c7;color:#d97706;}
+.pos-pay-unpaid{background:#fee2e2;color:#dc2626;}
+.pos-select{width:100%;background:var(--bg);border:1.5px solid var(--border2);border-radius:10px;padding:11px 14px;font-size:14px;color:var(--text);font-family:var(--font);outline:none;cursor:pointer;transition:border-color .15s;}
+.pos-select:focus{border-color:var(--orange);}
+.pos-footer{padding:14px 24px 20px;display:flex;gap:10px;}
+.pos-btn-confirm{flex:1;background:linear-gradient(135deg,var(--orange),var(--orange2));color:#fff;font-family:var(--font);font-size:15px;font-weight:800;padding:14px;border-radius:12px;border:none;cursor:pointer;transition:all .15s;box-shadow:0 4px 14px rgba(234,88,12,.3);display:flex;align-items:center;justify-content:center;gap:8px;}
+.pos-btn-confirm:hover{transform:translateY(-1px);box-shadow:0 6px 20px rgba(234,88,12,.35);}
+.pos-btn-confirm:active{transform:scale(.97);}
+.pos-btn-confirm:disabled{opacity:.55;cursor:not-allowed;transform:none;}
+.pos-btn-cancel{background:var(--bg);color:var(--text2);font-family:var(--font);font-size:14px;font-weight:600;padding:14px 18px;border-radius:12px;border:1.5px solid var(--border2);cursor:pointer;transition:all .15s;}
+.pos-btn-cancel:hover{background:var(--border);color:var(--text);}
+/* POS button on card */
+.act-btn--pos{background:linear-gradient(135deg,var(--orange),var(--orange2));color:#fff;border:none;box-shadow:0 2px 8px rgba(234,88,12,.25);}.act-btn--pos:hover{opacity:.9;}
+/* Search result info */
+#search-result-info{font-size:12px;color:var(--text3);margin-bottom:8px;display:none;font-weight:600;}
 </style>
 
 </head>
@@ -2461,6 +2650,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);}
       <div id="skeleton-state" class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
         <div class="skeleton h-52"></div><div class="skeleton h-52"></div><div class="skeleton h-52 hidden sm:block"></div>
       </div>
+      <div id="search-result-info"></div>
       <div id="orders-grid" class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4"></div>
       <div id="empty-state" class="py-20 text-center flex-col">
         <div class="w-16 h-16 rounded-2xl bg-slate-100 border border-slate-200 inline-flex items-center justify-center mb-3 text-3xl">🌾</div>
@@ -2545,6 +2735,63 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);}
     </div>
 
   </main>
+</div>
+
+
+<!-- ════════════════ POS MODAL ════════════════ -->
+<div id="pos-modal" class="fixed inset-0 z-[9500] hidden">
+  <div id="pos-modal-backdrop" class="absolute inset-0 bg-black/40 backdrop-blur-sm"></div>
+  <div class="absolute inset-0 flex items-center justify-center p-4">
+    <div class="pos-panel relative">
+      <div class="pos-header">
+        <div class="flex justify-between items-start">
+          <div>
+            <div class="pos-header__title">💳 Proses Pembayaran</div>
+            <div class="pos-header__sub">Konfirmasi & kirim nota ke customer</div>
+          </div>
+          <button onclick="closePOS()" class="w-8 h-8 rounded-lg bg-white/20 hover:bg-white/30 flex items-center justify-center text-white transition-all ml-4">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+          </button>
+        </div>
+        <div class="mt-3 grid grid-cols-2 gap-2">
+          <div class="bg-white/15 rounded-lg px-3 py-2"><div style="font-size:10px;opacity:.7;text-transform:uppercase;letter-spacing:.05em;">No. Order</div><div id="pos-order-id" class="font-mono font-bold text-base mt-0.5">-</div></div>
+          <div class="bg-white/15 rounded-lg px-3 py-2"><div style="font-size:10px;opacity:.7;text-transform:uppercase;letter-spacing:.05em;">Customer</div><div id="pos-customer" class="font-semibold text-sm mt-0.5 truncate">-</div></div>
+          <div class="bg-white/15 rounded-lg px-3 py-2"><div style="font-size:10px;opacity:.7;text-transform:uppercase;letter-spacing:.05em;">Area</div><div id="pos-area" class="font-mono font-bold text-sm mt-0.5">-</div></div>
+          <div class="bg-white/15 rounded-lg px-3 py-2"><div style="font-size:10px;opacity:.7;text-transform:uppercase;letter-spacing:.05em;">WhatsApp</div><div id="pos-phone" class="font-mono text-xs mt-0.5 truncate">-</div></div>
+        </div>
+      </div>
+      <div class="pos-section">
+        <div class="pos-section__label">🧾 Item Pesanan</div>
+        <div id="pos-items-list" class="space-y-1"></div>
+      </div>
+      <div class="pos-section">
+        <div class="pos-section__label">💰 Rincian Harga</div>
+        <div class="pos-total-row"><span>Subtotal</span><span id="pos-subtotal">-</span></div>
+        <div id="pos-fee-row" class="pos-total-row" style="display:none"><span id="pos-fee-label">Service fee</span><span id="pos-fee-amount">-</span></div>
+        <div class="pos-total-row pos-total-row--grand"><span>TOTAL</span><span id="pos-total">-</span></div>
+      </div>
+      <div class="pos-section" style="border-bottom:none">
+        <div class="pos-section__label flex items-center justify-between">
+          <span>💳 Metode Pembayaran</span>
+          <span id="pos-payment-status" class="pos-pay-status pos-pay-unpaid">UNPAID</span>
+        </div>
+        <select id="pos-payment-method" class="pos-select">
+          <option value="Cash">💵 Cash — Bayar Tunai</option>
+          <option value="QRIS">📱 QRIS — Scan QR</option>
+          <option value="Transfer">🏦 Transfer Bank</option>
+          <option value="Debit">💳 Kartu Debit</option>
+        </select>
+        <div class="mt-2 text-xs text-slate-400">Setelah konfirmasi: order → <strong>Selesai</strong>, payment → <strong>PAID</strong>, nota WA terkirim.</div>
+      </div>
+      <div class="pos-footer">
+        <button id="btn-pos-confirm" onclick="confirmPOS()" class="pos-btn-confirm">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+          Konfirmasi & Kirim Nota
+        </button>
+        <button onclick="closePOS()" class="pos-btn-cancel">Batal</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- ════════════════ MENU MODAL ════════════════ -->
