@@ -591,29 +591,58 @@ function closePOS() {
   posOrder=null; posModalOpen=false;
 }
 async function confirmPOS() {
-  if(!posOrder) return;
-  const btn=document.getElementById("btn-pos-confirm");
-  const pm=document.getElementById("pos-payment-method")?.value||"Cash";
-  if(pm==="Cash"){
-    const cv=parseInt(document.getElementById("pos-cash-input")?.value)||0;
-    if(cv>0&&cv<(posOrder.total||0)){showToast("Uang kurang dari total!","error");return;}
+  if(!posOrder) {
+    showToast("Error: data order tidak ada, coba buka ulang POS","error");
+    return;
   }
-  if(btn){btn.disabled=true;btn.textContent="Memproses…";}
+
+  const btn = document.getElementById("btn-pos-confirm");
+  const pm  = document.getElementById("pos-payment-method")?.value || "Cash";
+
+  // Validasi cash
+  if(pm==="Cash") {
+    const cv = parseInt(document.getElementById("pos-cash-input")?.value) || 0;
+    if(cv > 0 && cv < (posOrder.total||0)) {
+      showToast("Uang yang diterima kurang dari total!", "error");
+      return;
+    }
+  }
+
+  // Disable tombol
+  if(btn) { btn.disabled=true; btn.textContent="⌛ Memproses…"; }
+
   try {
-    const cv=pm==="Cash"?(parseInt(document.getElementById("pos-cash-input")?.value)||0):0;
-    const chg=cv>0?Math.max(0,cv-(posOrder.total||0)):0;
-    const extra=pm==="Cash"&&cv>0?{cashPaid:cv,cashChange:chg}:{};
-    await updateDoc(doc(db,"orders",posOrder.id),{
-      orderStatus:"DONE",paymentStatus:"PAID",paymentMethod:pm,
-      paidAt:serverTimestamp(),updatedAt:serverTimestamp(),completedAt:serverTimestamp(),...extra,
+    const cv  = pm==="Cash" ? (parseInt(document.getElementById("pos-cash-input")?.value)||0) : 0;
+    const chg = cv > 0 ? Math.max(0, cv-(posOrder.total||0)) : 0;
+    const extra = (pm==="Cash" && cv>0) ? {cashPaid:cv, cashChange:chg} : {};
+
+    // Step 1: Update Firestore
+    await updateDoc(doc(db,"orders",posOrder.id), {
+      orderStatus:   "DONE",
+      paymentStatus: "PAID",
+      paymentMethod: pm,
+      paidAt:        serverTimestamp(),
+      updatedAt:     serverTimestamp(),
+      completedAt:   serverTimestamp(),
+      ...extra,
     });
-    const receiptOrder={...posOrder,paymentMethod:pm,paymentStatus:"PAID",...extra};
-    printNota(receiptOrder);      // Cetak nota fisik via RawBT (otomatis)
-    showToast("✅ Pembayaran dikonfirmasi — Nota WA terkirim!","success");
+
+    // Step 2: Cetak nota (terpisah dari Firestore — tidak mempengaruhi hasil)
+    const receiptOrder = {...posOrder, paymentMethod:pm, paymentStatus:"PAID", ...extra};
+    try {
+      printNota(receiptOrder);
+    } catch(printErr) {
+      console.error("printNota error:", printErr);
+      showToast("Pembayaran berhasil, tapi printer error: "+printErr.message, "info");
+    }
+
+    showToast("✅ Pembayaran berhasil!", "success");
     closePOS();
-  } catch(e){
-    console.error(e);showToast("Gagal: "+e.message,"error");
-    if(btn){btn.disabled=false;btn.textContent="Konfirmasi & Kirim Nota";}
+
+  } catch(e) {
+    console.error("confirmPOS Firestore error:", e);
+    showToast("Gagal simpan: " + (e.message||e.code||"unknown error"), "error");
+    if(btn) { btn.disabled=false; btn.textContent="Konfirmasi & Kirim Nota"; }
   }
 }
 window.confirmPOS=confirmPOS;
@@ -2380,6 +2409,8 @@ document.getElementById("search-input").addEventListener("keydown",e=>{
   });
 
 
+  // POS button — pakai addEventListener (lebih reliable di Safari module)
+  document.getElementById("btn-pos-confirm")?.addEventListener("click", confirmPOS);
   document.getElementById("pos-modal-backdrop")?.addEventListener("click", closePOS);
 
   document.addEventListener("keydown",e=>{
@@ -3050,7 +3081,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);}
         <div class="mt-2 text-xs text-slate-400">Setelah konfirmasi: order → <strong>Selesai</strong>, payment → <strong>PAID</strong>, nota fisik dicetak otomatis via printer.</div>
       </div>
       <div class="pos-footer">
-        <button id="btn-pos-confirm" onclick="confirmPOS()" class="pos-btn-confirm">
+        <button id="btn-pos-confirm" class="pos-btn-confirm">
           <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
           Konfirmasi & Kirim Nota
         </button>
