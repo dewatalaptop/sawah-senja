@@ -372,9 +372,16 @@ function startOrdersListener() {
     renderHeaderStats(); renderFilterBadges();
     if(activeTab==="orders") renderOrders();
   }, err=>{
-    console.error(err);
+    console.error("Orders listener error:", err);
     document.getElementById("skeleton-state")?.classList.add("hidden");
-    showToast("Error koneksi Firestore","error");
+    showToast("Koneksi terputus — mencoba ulang…","error");
+    // Auto-restart listener setelah 5 detik
+    setTimeout(()=>{
+      if(currentUser) {
+        showToast("Menghubungkan ulang…","info");
+        startOrdersListener();
+      }
+    }, 5000);
   });
 }
 
@@ -1063,7 +1070,21 @@ function renderOrders() {
   }
   if(list.length===0){ grid.innerHTML=""; empty.style.display="flex"; return; }
   empty.style.display="none";
-  grid.innerHTML=list.map(buildCard).join("");
+  // Render per card dengan try/catch — 1 card error tidak crash semua
+  const cards = list.map(o => {
+    try { return buildCard(o); }
+    catch(err) {
+      console.error("buildCard error for order", o.orderId, err);
+      return `<div class="order-card card-new" style="border:2px solid #fca5a5;">
+        <div class="p-4">
+          <div class="font-mono font-bold text-red-600">${o.orderId||o.id}</div>
+          <div class="text-xs text-red-400 mt-1">Error render: ${err.message}</div>
+          <div class="text-xs text-slate-400 mt-1">${o.customerName||"-"} · ${o.orderStatus||"-"}</div>
+        </div>
+      </div>`;
+    }
+  });
+  grid.innerHTML=cards.join("");
 
   grid.querySelectorAll("[data-action]").forEach(btn=>{
     btn.addEventListener("click",()=>{
