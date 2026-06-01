@@ -612,20 +612,7 @@ window.confirmPOS=confirmPOS;
 window.closePOS=closePOS;
 window.openPOS=openPOS;
 
-function sendReadyWA(order) {
-  const phone=String(order.customerWhatsapp).replace(/\D/g,"");
-  const itemLines=(order.items||[]).map(i=>`  • ${i.qty}× ${i.name}${i.notes?` _(${i.notes})_`:""}`).join("\n");
-  const msg=encodeURIComponent(
-    `Halo *${order.customerName}* 👋\n\n`+
-    `Pesanan *#${order.orderId}* sudah *siap diambil!* 🌾\n\n`+
-    `${itemLines}\n\n`+
-    `Silakan menuju pickup counter kami.\n`+
-    `Pembayaran: *${order.paymentMethod||"-"}*\n\n`+
-    `_${appSettings.storeName||"Sawah Senja"}_`
-  );
-  window.open(`https://wa.me/${phone}?text=${msg}`,"_blank");
-  updateDoc(doc(db,"orders",order.id),{whatsappSent:true}).catch(()=>{});
-}
+// sendReadyWA — implementasi lengkap ada di bawah
 
 
 // ── Print Nota Fisik via RawBT ───────────────────────────────
