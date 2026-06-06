@@ -554,6 +554,31 @@ function openPOS(order) {
   const modal=document.getElementById("pos-modal");
   modal.classList.remove("hidden");
   requestAnimationFrame(()=>modal.classList.add("pos-modal-visible"));
+
+  // Pasang event listeners setelah modal tampil (aman di Safari module)
+  const cashInp = document.getElementById("pos-cash-input");
+  const pmSel2  = document.getElementById("pos-payment-method");
+
+  if(cashInp) {
+    // Hapus listener lama dulu (hindari duplikat saat buka berulang)
+    const newCash = cashInp.cloneNode(true);
+    cashInp.parentNode.replaceChild(newCash, cashInp);
+    newCash.addEventListener("input",   function(){ updateKembalian(); });
+    newCash.addEventListener("keydown", function(e){
+      if(e.key==="Enter") confirmPOS();
+    });
+  }
+
+  if(pmSel2) {
+    const newSel = pmSel2.cloneNode(true);
+    pmSel2.parentNode.replaceChild(newSel, pmSel2);
+    newSel.addEventListener("change", function(){ onPOSPayMethodChange(); });
+    // Set value kembali setelah clone
+    newSel.value = order.paymentMethod||"Cash";
+  }
+
+  // Trigger method change untuk set tampilan awal
+  onPOSPayMethodChange();
 }
 
 // Update tampilan cash/kembalian saat metode berubah
@@ -661,142 +686,142 @@ function printNota(order) {
   const store = appSettings.storeName || "Sawah Senja";
   const W     = 32;
 
-  // ── Helper functions ─────────────────────────────────────────
   function center(str) {
-    str = String(str).slice(0, W);
+    str = String(str||"").slice(0, W);
     var pad = Math.floor((W - str.length) / 2);
     return " ".repeat(Math.max(0, pad)) + str;
   }
   function sep(ch) { return (ch||"-").repeat(W); }
 
-  // Word wrap: pecah teks panjang menjadi beberapa baris centered
   function wrapCenter(str, maxW) {
     str = String(str||"").trim();
     if(!str) return [];
     var words = str.split(" ");
-    var lines = [];
-    var cur   = "";
+    var lines = [], cur = "";
     words.forEach(function(w) {
-      if((cur + (cur?" ":"") + w).length <= maxW) {
-        cur += (cur?" ":"") + w;
-      } else {
-        if(cur) lines.push(center(cur));
-        cur = w.slice(0, maxW);
-      }
+      if((cur + (cur?" ":"") + w).length <= maxW) { cur += (cur?" ":"") + w; }
+      else { if(cur) lines.push(center(cur)); cur = w.slice(0, maxW); }
     });
     if(cur) lines.push(center(cur));
     return lines;
   }
 
-  function sep(ch) { return (ch||"-").repeat(W); }
+  var subtotal = order.subtotal || 0;
+  var fee      = order.serviceFee || 0;
+  var total    = order.total || 0;
+  var feeLabel = order.serviceFeeLabel || appSettings.serviceFeeLabel || "Service fee";
 
-  const subtotal  = order.subtotal || 0;
-  const fee       = order.serviceFee || 0;
-  const total     = order.total || 0;
-  const feeLabel  = order.serviceFeeLabel || appSettings.serviceFeeLabel || "Service fee";
+  // ── Build baris nota (shared antara customer copy & kasir copy) ─
+  function buildLines(isCashierCopy) {
+    var lines = [];
+    lines.push("");
 
-  // ── Build nota ────────────────────────────────────────────────
-  var lines = [];
-  lines.push("");
-  lines.push(center(store.toUpperCase()));
-
-  // Alamat — word wrap jika panjang
-  if(appSettings.storeAddress) {
-    wrapCenter(appSettings.storeAddress, W).forEach(function(l){ lines.push(l); });
-  }
-  if(appSettings.storePhone) {
-    lines.push(center(appSettings.storePhone));
-  }
-
-  lines.push(sep("="));
-  lines.push(center("NOTA TRANSAKSI"));
-  lines.push(sep("="));
-  lines.push("No Order : " + (order.orderId||"-"));
-  lines.push("Tanggal  : " + tgl);
-  lines.push("Jam      : " + jam);
-  lines.push("Area     : " + (order.areaCode||"-"));
-  lines.push("Customer : " + (order.customerName||"-").slice(0, 20));
-  lines.push("Kasir    : " + (currentUser&&currentUser.email?currentUser.email.split("@")[0]:"Staff"));
-  lines.push(sep("-"));
-  lines.push(center("PESANAN"));
-  lines.push(sep("-"));
-
-  (order.items||[]).forEach(function(i) {
-    var prefix = String(i.qty) + "x " + i.name;
-    var price  = "Rp " + Number((i.price||0)*(i.qty||0)).toLocaleString("id-ID");
-    var space  = W - prefix.length - price.length;
-    if(space > 0) {
-      lines.push(prefix + " ".repeat(space) + price);
-    } else {
-      // Nama item terlalu panjang — wrap
-      lines.push(prefix.slice(0, W));
-      lines.push(" ".repeat(W - price.length) + price);
+    // Header kasir copy
+    if(isCashierCopy) {
+      lines.push(sep("*"));
+      lines.push(center("*** KASIR COPY ***"));
+      lines.push(center("Input ke Moka saat closing"));
+      lines.push(sep("*"));
+      lines.push("");
     }
-    if(i.notes) lines.push("  >> " + i.notes.slice(0, W-5));
-  });
 
-  lines.push(sep("-"));
+    lines.push(center(store.toUpperCase()));
+    if(appSettings.storeAddress) {
+      wrapCenter(appSettings.storeAddress, W).forEach(function(l){ lines.push(l); });
+    }
+    if(appSettings.storePhone) lines.push(center(appSettings.storePhone));
+    lines.push(sep("="));
+    lines.push(center(isCashierCopy ? "NOTA KASIR" : "NOTA TRANSAKSI"));
+    lines.push(sep("="));
+    lines.push("No Order : " + (order.orderId||"-"));
+    lines.push("Tanggal  : " + tgl);
+    lines.push("Jam      : " + jam);
+    lines.push("Area     : " + (order.areaCode||"-"));
+    lines.push("Customer : " + (order.customerName||"-").slice(0, 20));
+    if(!isCashierCopy) {
+      lines.push("Kasir    : " + (currentUser&&currentUser.email?currentUser.email.split("@")[0]:"Staff"));
+    } else {
+      lines.push("Kasir    : " + (currentUser&&currentUser.email?currentUser.email.split("@")[0]:"Staff"));
+    }
+    lines.push(sep("-"));
+    lines.push(center("PESANAN"));
+    lines.push(sep("-"));
 
-  // Subtotal
-  var subStr = "Rp " + Number(subtotal).toLocaleString("id-ID");
-  lines.push("Subtotal" + " ".repeat(Math.max(1, W-8-subStr.length)) + subStr);
+    (order.items||[]).forEach(function(i) {
+      var prefix = String(i.qty) + "x " + i.name;
+      var price  = "Rp " + Number((i.price||0)*(i.qty||0)).toLocaleString("id-ID");
+      var space  = W - prefix.length - price.length;
+      if(space > 0) { lines.push(prefix + " ".repeat(space) + price); }
+      else { lines.push(prefix.slice(0, W)); lines.push(" ".repeat(W - price.length) + price); }
+      if(i.notes) lines.push("  >> " + i.notes.slice(0, W-5));
+    });
 
-  // Fee
-  if(fee > 0) {
-    var feeStr = "Rp " + Number(fee).toLocaleString("id-ID");
-    var lbl    = feeLabel.slice(0, W - feeStr.length - 1);
-    lines.push(lbl + " ".repeat(Math.max(1, W-lbl.length-feeStr.length)) + feeStr);
+    lines.push(sep("-"));
+    var subStr = "Rp " + Number(subtotal).toLocaleString("id-ID");
+    lines.push("Subtotal" + " ".repeat(Math.max(1, W-8-subStr.length)) + subStr);
+    if(fee > 0) {
+      var feeStr = "Rp " + Number(fee).toLocaleString("id-ID");
+      var lbl    = feeLabel.slice(0, W - feeStr.length - 1);
+      lines.push(lbl + " ".repeat(Math.max(1, W-lbl.length-feeStr.length)) + feeStr);
+    }
+    lines.push(sep("="));
+    var totStr = "Rp " + Number(total).toLocaleString("id-ID");
+    lines.push("TOTAL" + " ".repeat(Math.max(1, W-5-totStr.length)) + totStr);
+    lines.push(sep("="));
+    lines.push("Bayar    : " + (order.paymentMethod||"-"));
+    if(order.cashPaid) {
+      var cpStr  = "Rp " + Number(order.cashPaid).toLocaleString("id-ID");
+      var chgStr = "Rp " + Number(order.cashChange||0).toLocaleString("id-ID");
+      lines.push("Tunai" + " ".repeat(Math.max(1, W-5-cpStr.length)) + cpStr);
+      lines.push("Kembali" + " ".repeat(Math.max(1, W-7-chgStr.length)) + chgStr);
+    }
+    lines.push(sep("="));
+    lines.push(center("** LUNAS **"));
+    lines.push(sep("="));
+
+    if(isCashierCopy) {
+      // Info khusus kasir copy untuk input Moka
+      lines.push("");
+      lines.push(center("-- INPUT MOKA --"));
+      lines.push("Metode : " + (order.paymentMethod||"-"));
+      var totMoka = "Rp " + Number(total).toLocaleString("id-ID");
+      lines.push("Nominal: " + totMoka);
+      lines.push(sep("-"));
+    } else {
+      // Footer customer copy
+      wrapCenter(appSettings.receiptFooter||"Terima kasih!", W).forEach(function(l){ lines.push(l); });
+    }
+
+    lines.push(""); lines.push(""); lines.push("");
+    return lines;
   }
 
-  lines.push(sep("="));
-
-  // Total
-  var totStr = "Rp " + Number(total).toLocaleString("id-ID");
-  lines.push("TOTAL" + " ".repeat(Math.max(1, W-5-totStr.length)) + totStr);
-  lines.push(sep("="));
-
-  lines.push("Bayar     : " + (order.paymentMethod||"-"));
-
-  // Cash detail
-  if(order.cashPaid) {
-    var cpStr  = "Rp " + Number(order.cashPaid).toLocaleString("id-ID");
-    var chgStr = "Rp " + Number(order.cashChange||0).toLocaleString("id-ID");
-    lines.push("Tunai" + " ".repeat(Math.max(1, W-5-cpStr.length)) + cpStr);
-    lines.push("Kembali" + " ".repeat(Math.max(1, W-7-chgStr.length)) + chgStr);
+  // ── Kirim ke RawBT via rawbt:// ─────────────────────────────
+  function sendToRawBT(txt, label) {
+    try {
+      var encoded  = encodeURIComponent(txt);
+      var rawbtUrl = "rawbt://print?printer=sawahsenja&text=" + encoded;
+      var a = document.createElement("a");
+      a.href = rawbtUrl; a.style.display = "none";
+      document.body.appendChild(a); a.click();
+      setTimeout(function(){ document.body.removeChild(a); }, 1500);
+    } catch(e) {
+      console.error("printNota sendToRawBT error:", e);
+    }
   }
 
-  lines.push(sep("="));
-  lines.push(center("** LUNAS **"));
-  lines.push(sep("="));
+  // ── Print Copy 1: Customer ───────────────────────────────────
+  var customerTxt = buildLines(false).join("\n");
+  sendToRawBT(customerTxt, "Customer");
+  showToast("🖨 Mencetak nota (2 lembar)…", "info");
 
-  // Footer — word wrap jika panjang
-  var footer = appSettings.receiptFooter || "Terima kasih!";
-  wrapCenter(footer, W).forEach(function(l){ lines.push(l); });
-
-  lines.push("");
-  lines.push("");
-  lines.push("");
-
-  var txt = lines.join("\n");
-
-  // ── Kirim ke RawBT via rawbt:// scheme ───────────────────────
-  // Format: rawbt://print?printer=NAME&text=ENCODED_TEXT
-  // Ini yang benar — bukan intent:// yang menyebabkan URL tercetak
-  try {
-    var encoded    = encodeURIComponent(txt);
-    var rawbtUrl   = "rawbt://print?printer=sawahsenja&text=" + encoded;
-
-    var a = document.createElement("a");
-    a.href = rawbtUrl;
-    a.style.display = "none";
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(function(){ document.body.removeChild(a); }, 1500);
-    showToast("🖨 Nota dikirim ke printer…", "info");
-  } catch(e) {
-    console.error("printNota error:", e);
-    showToast("Printer error: " + e.message, "error");
-  }
+  // ── Print Copy 2: Kasir — delay 3 detik agar printer selesai ─
+  // Printer thermal butuh waktu sebelum menerima job berikutnya
+  setTimeout(function() {
+    var cashierTxt = buildLines(true).join("\n");
+    sendToRawBT(cashierTxt, "Kasir");
+    showToast("🖨 Nota kasir dicetak!", "success");
+  }, 3000);
 }
 
 window.printNota = printNota;
@@ -3236,7 +3261,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);}
           <span>💳 Metode Pembayaran</span>
           <span id="pos-payment-status" class="pos-pay-status pos-pay-unpaid">UNPAID</span>
         </div>
-        <select id="pos-payment-method" class="pos-select" onchange="onPOSPayMethodChange()">
+        <select id="pos-payment-method" class="pos-select">
           <option value="Cash">💵 Cash — Bayar Tunai</option>
           <option value="QRIS">📱 QRIS — Scan QR</option>
           <option value="Transfer">🏦 Transfer Bank</option>
@@ -3250,9 +3275,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);}
               <label class="text-[10px] font-bold text-slate-400 uppercase tracking-wide">Uang Diterima (Rp)</label>
               <input id="pos-cash-input" type="number" min="0" step="1000"
                 placeholder="cth: 50000"
-                class="pos-cash-inp mt-1 w-full"
-                oninput="updateKembalian()"
-                onkeydown="if(event.key==='Enter')confirmPOS()"/>
+                class="pos-cash-inp mt-1 w-full"/>
             </div>
             <div class="text-right flex-shrink-0">
               <div class="text-[10px] font-bold text-slate-400 uppercase tracking-wide">Kembalian</div>
