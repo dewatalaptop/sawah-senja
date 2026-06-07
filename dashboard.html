@@ -552,9 +552,16 @@ function openPOS(order) {
     const suggestions=rounds.filter(r=>r>=total).slice(0,4);
     // Jika total sendiri bulat, tambahkan juga jumlah pas
     if(!suggestions.includes(total)&&total>0) suggestions.unshift(total);
-    qcEl.innerHTML=suggestions.map(r=>
-      `<button class="pos-quick-btn" onclick="document.getElementById('pos-cash-input').value=${r};updateKembalian()">${fmt(r)}</button>`
+    qcEl.innerHTML = suggestions.map(r=>
+      `<button class="pos-quick-btn" data-amount="${r}">${fmt(r)}</button>`
     ).join("");
+    // Pasang listener setelah render (aman di Safari module)
+    qcEl.querySelectorAll(".pos-quick-btn").forEach(function(qb) {
+      qb.addEventListener("click", function() {
+        var inp = document.getElementById("pos-cash-input");
+        if(inp) { inp.value = qb.dataset.amount; updateKembalian(); inp.focus(); }
+      });
+    });
   }
 
   // Payment status badge
@@ -635,28 +642,43 @@ async function confirmPOS() {
     return;
   }
 
-  const btn = document.getElementById("btn-pos-confirm");
-  const pm  = document.getElementById("pos-payment-method")?.value || "Cash";
+  const btn      = document.getElementById("btn-pos-confirm");
+  const pm       = document.getElementById("pos-payment-method")?.value || "Cash";
+  const orderSnap = {...posOrder}; // snapshot sebelum modal ditutup
 
-  // Validasi cash
+  // ── Fungsi re-enable tombol (dipanggil di semua jalur) ──────
+  function resetBtn() {
+    if(btn) { btn.disabled=false; btn.textContent="Konfirmasi & Kirim Nota"; }
+  }
+
+  // ── Validasi cash ────────────────────────────────────────────
   if(pm==="Cash") {
     const cv = parseInt(document.getElementById("pos-cash-input")?.value) || 0;
-    if(cv > 0 && cv < (posOrder.total||0)) {
+    if(cv > 0 && cv < (orderSnap.total||0)) {
       showToast("Uang yang diterima kurang dari total!", "error");
-      return;
+      return; // btn belum disabled, aman
     }
   }
 
-  // Disable tombol
+  // ── Ambil nilai cash sebelum modal ditutup ───────────────────
+  const cv  = pm==="Cash" ? (parseInt(document.getElementById("pos-cash-input")?.value)||0) : 0;
+  const chg = cv > 0 ? Math.max(0, cv-(orderSnap.total||0)) : 0;
+  const extra = (pm==="Cash" && cv>0) ? {cashPaid:cv, cashChange:chg} : {};
+
+  // ── Disable tombol ───────────────────────────────────────────
   if(btn) { btn.disabled=true; btn.textContent="⌛ Memproses…"; }
 
-  try {
-    const cv  = pm==="Cash" ? (parseInt(document.getElementById("pos-cash-input")?.value)||0) : 0;
-    const chg = cv > 0 ? Math.max(0, cv-(posOrder.total||0)) : 0;
-    const extra = (pm==="Cash" && cv>0) ? {cashPaid:cv, cashChange:chg} : {};
+  // ── Safety timeout: jika 12 detik masih stuck → re-enable ───
+  const safetyTimer = setTimeout(function() {
+    if(btn && btn.disabled) {
+      resetBtn();
+      showToast("Timeout — coba lagi atau periksa koneksi", "error");
+    }
+  }, 12000);
 
-    // Step 1: Update Firestore
-    await updateDoc(doc(db,"orders",posOrder.id), {
+  try {
+    // ── Step 1: Update Firestore dengan timeout race ─────────────
+    const updatePromise = updateDoc(doc(db,"orders",orderSnap.id), {
       orderStatus:   "DONE",
       paymentStatus: "PAID",
       paymentMethod: pm,
@@ -666,22 +688,35 @@ async function confirmPOS() {
       ...extra,
     });
 
-    // Step 2: Cetak nota (terpisah dari Firestore — tidak mempengaruhi hasil)
-    const receiptOrder = {...posOrder, paymentMethod:pm, paymentStatus:"PAID", ...extra};
-    try {
-      printNota(receiptOrder);
-    } catch(printErr) {
-      console.error("printNota error:", printErr);
-      showToast("Pembayaran berhasil, tapi printer error: "+printErr.message, "info");
-    }
+    // Timeout 10 detik untuk updateDoc
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("Koneksi lambat — coba lagi")), 10000)
+    );
 
-    showToast("✅ Pembayaran berhasil!", "success");
+    await Promise.race([updatePromise, timeoutPromise]);
+
+    // ── Step 2: Tutup modal DULU sebelum print ───────────────────
+    clearTimeout(safetyTimer);
     closePOS();
+    showToast("✅ Pembayaran berhasil!", "success");
+
+    // ── Step 3: Cetak nota SETELAH modal tertutup ────────────────
+    // Delay kecil agar DOM modal selesai cleanup
+    const receiptOrder = {...orderSnap, paymentMethod:pm, paymentStatus:"PAID", ...extra};
+    setTimeout(function() {
+      try { printNota(receiptOrder); }
+      catch(printErr) {
+        console.error("printNota error:", printErr);
+        showToast("Printer error: "+printErr.message, "info");
+      }
+    }, 300);
 
   } catch(e) {
-    console.error("confirmPOS Firestore error:", e);
-    showToast("Gagal simpan: " + (e.message||e.code||"unknown error"), "error");
-    if(btn) { btn.disabled=false; btn.textContent="Konfirmasi & Kirim Nota"; }
+    clearTimeout(safetyTimer);
+    console.error("confirmPOS error:", e);
+    const msg = e.message || e.code || "Gagal menyimpan";
+    showToast("Gagal: " + msg, "error");
+    resetBtn(); // selalu re-enable di catch
   }
 }
 window.confirmPOS=confirmPOS;
