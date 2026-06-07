@@ -865,11 +865,14 @@ function printNota(order) {
   showToast("🖨 Mencetak nota (2 lembar)…", "info");
 
   // ── Print Copy 2: Kasir — delay 3 detik agar printer selesai ─
-  // Printer thermal butuh waktu sebelum menerima job berikutnya
   setTimeout(function() {
-    var cashierTxt = buildLines(true).join("\n");
-    sendToRawBT(cashierTxt, "Kasir");
-    showToast("🖨 Nota kasir dicetak!", "success");
+    try {
+      var cashierTxt = buildLines(true).join("\n");
+      sendToRawBT(cashierTxt, "Kasir");
+      showToast("🖨 Nota kasir dicetak!", "success");
+    } catch(e) {
+      console.error("printNota kasir copy error:", e);
+    }
   }, 3000);
 }
 
@@ -2256,8 +2259,8 @@ function renderReportPanel() {
               <td class="text-center"><span class="rpt-pay-badge rpt-pay-${(o.paymentStatus||"").toLowerCase()}">${o.paymentStatus||"-"}</span></td>
               <td class="text-right mono font-semibold text-sm">${fmt(o.total||0)}</td>
               <td class="text-center no-print">
-                <button onclick="deleteReportOrder('${o.id}','${o.orderId||o.id}')"
-                  class="rpt-del-btn" title="Hapus transaksi ini dari database">
+                <button class="rpt-del-btn" title="Hapus transaksi ini dari database"
+                  data-doc-id="${o.id}" data-order-label="${o.orderId||o.id}">
                   🗑
                 </button>
               </td>
@@ -2353,6 +2356,15 @@ function showClosingRecap() {
   });
 }
 window.showClosingRecap=showClosingRecap;
+
+// ── Event delegation untuk rpt-del-btn (laporan) ─────────
+// Dipanggil setelah renderReportPanel set innerHTML
+// Lebih reliable dari addEventListener karena panel di-recreate tiap render
+document.addEventListener("click", function(e) {
+  const btn = e.target.closest(".rpt-del-btn[data-doc-id]");
+  if(!btn) return;
+  deleteReportOrder(btn.dataset.docId, btn.dataset.orderLabel);
+});
 
 // ── Export Excel ──────────────────────────────────────────────
 function exportExcel() {
