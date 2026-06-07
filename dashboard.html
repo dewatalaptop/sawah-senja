@@ -191,6 +191,20 @@ const db   = getFirestore(app);
 // STATE
 // ─────────────────────────────────────────────────────────────
 let allOrders=[], activeFilter="ALL", searchQuery="";
+
+// ── KOT daily sequence counter ──────────────────────────────
+function getNextKotNumber() {
+  const today = new Date().toISOString().slice(0,10);
+  const key   = "ss_kot_" + today;
+  let   num   = parseInt(localStorage.getItem(key)||"0") + 1;
+  localStorage.setItem(key, String(num));
+  try {
+    Object.keys(localStorage).forEach(k=>{
+      if(k.startsWith("ss_kot_") && k !== key) localStorage.removeItem(k);
+    });
+  } catch(e) {}
+  return num;
+}
 let unsubOrders=null, unsubMenu=null, unsubSettings=null;
 let knownOrderIds=new Set(), audioCtx=null;
 let menuItems=[], activeTab="orders";
@@ -874,38 +888,37 @@ ${appSettings.receiptFooter||"Terima kasih sudah makan di Sawah Senja 🌾"}${ap
 // KOT — Kitchen Order Ticket (cetak ke printer thermal dapur)
 // ─────────────────────────────────────────────────────────────
 function printKOT(order) {
-  const now   = new Date();
-  const jam   = now.toLocaleTimeString("id-ID", {hour:"2-digit", minute:"2-digit"});
-  const tgl   = now.toLocaleDateString("id-ID",  {day:"2-digit", month:"2-digit", year:"2-digit"});
-  const store = appSettings.storeName || "Sawah Senja";
-  const W     = 32;
+  const kotNum = getNextKotNumber();
+  const now    = new Date();
+  const jam    = now.toLocaleTimeString("id-ID", {hour:"2-digit", minute:"2-digit"});
+  const tgl    = now.toLocaleDateString("id-ID",  {day:"2-digit", month:"2-digit", year:"2-digit"});
+  const store  = appSettings.storeName || "Sawah Senja";
+  const W      = 32;
+  const kotLabel = "#" + String(kotNum).padStart(3,"0");
 
   function center(str) {
     str = String(str).slice(0, W);
-    var pad = Math.floor((W - str.length) / 2);
-    return " ".repeat(Math.max(0, pad)) + str;
-  }
-  function left(label, value) {
-    return (label + String(value)).slice(0, W);
+    return " ".repeat(Math.max(0, Math.floor((W-str.length)/2))) + str;
   }
   function sep(ch) { return (ch||"-").repeat(W); }
 
-  // ── Build teks KOT ──────────────────────────────────────────
   var lines = [];
   lines.push("");
   lines.push(center("KITCHEN ORDER TICKET"));
   lines.push(center(store));
   lines.push(sep("="));
-  lines.push(left("No  : ", order.orderId   || "-"));
-  lines.push(left("Area: ", order.areaCode  || "-"));
-  lines.push(left("Jam : ", jam + "  " + tgl));
-  lines.push(left("Tamu: ", (order.customerName||"-").slice(0, 22)));
-  lines.push(left("WA  : ", (order.customerWhatsapp||"-").slice(0, 22)));
+  lines.push(center("No. Masak: " + kotLabel));
+  lines.push(sep("-"));
+  lines.push("No Order: " + (order.orderId || "-"));
+  lines.push("Area    : " + (order.areaCode  || "-"));
+  lines.push("Jam     : " + jam + "  " + tgl);
+  lines.push("Tamu    : " + (order.customerName||"-").slice(0, 22));
+  lines.push("WA      : " + (order.customerWhatsapp||"-").slice(0, 22));
   lines.push(sep("="));
   lines.push(center("*** DAFTAR MASAK ***"));
   lines.push(sep("-"));
   (order.items||[]).forEach(function(i) {
-    var prefix = String(i.qty).padStart(2) + "x  ";
+    var prefix  = String(i.qty).padStart(2) + "x  ";
     var maxName = W - prefix.length;
     var nm = i.name.length > maxName ? i.name.slice(0, maxName-1)+"." : i.name;
     lines.push(prefix + nm);
@@ -916,116 +929,62 @@ function printKOT(order) {
   lines.push("");
   lines.push("");
   lines.push("");
+  lines.push("- - - - POTONG - - - - - - - - -");
+  lines.push("");
 
   var txt = lines.join("\n");
 
-  // ── Coba RawBT intent dulu (otomatis, tanpa copy-paste) ─────
-  // RawBT printer name: sawahsenja (sesuai foto pengaturan)
   function tryRawBT() {
     try {
-      // RawBT mendukung intent URL dengan parameter text
-      // Encode teks dan arahkan ke RawBT
-      var encoded = encodeURIComponent(txt);
+      var encoded  = encodeURIComponent(txt);
       var rawbtUrl = "rawbt://print?printer=sawahsenja&text=" + encoded;
-
-      // Buat link tersembunyi dan klik — ini trigger RawBT di Android
       var a = document.createElement("a");
-      a.href = rawbtUrl;
-      a.style.display = "none";
-      document.body.appendChild(a);
-      a.click();
-      setTimeout(function() {
-        document.body.removeChild(a);
-      }, 1000);
-
-      // Tampilkan toast konfirmasi (bukan modal — lebih cepat)
-      showToast("🖨 KOT dikirim ke printer…", "info");
-
-      // Fallback: jika 3 detik tidak ada respons, tawarkan manual
-      setTimeout(function() {
-        // Jika RawBT tidak handle intent, user masih bisa manual
-      }, 3000);
-
-    } catch(e) {
-      // Fallback ke modal copy-paste
-      showKotFallback(txt);
-    }
+      a.href = rawbtUrl; a.style.display = "none";
+      document.body.appendChild(a); a.click();
+      setTimeout(function(){ document.body.removeChild(a); }, 1000);
+      showToast("🖨 KOT " + kotLabel + " dikirim ke printer…", "info");
+    } catch(e) { showKotFallback(txt); }
   }
 
-  // ── Fallback modal (jika RawBT gagal / tidak install) ───────
   function showKotFallback(text) {
     var old = document.getElementById("__kot_modal__");
     if (old) old.parentNode.removeChild(old);
-
-    // Copy ke clipboard dulu
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(text).catch(function(){});
-    } else {
-      var ta = document.createElement("textarea");
-      ta.value = text;
-      ta.style.cssText = "position:fixed;top:0;left:0;opacity:0;font-size:16px;";
-      document.body.appendChild(ta);
-      ta.focus(); ta.select();
-      try { document.execCommand("copy"); } catch(e2) {}
-      document.body.removeChild(ta);
     }
-
     var modal = document.createElement("div");
     modal.id = "__kot_modal__";
     modal.style.cssText = "position:fixed;inset:0;z-index:99990;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;padding:16px;";
     modal.innerHTML =
       '<div style="background:#fff;border-radius:16px;width:100%;max-width:400px;overflow:hidden;box-shadow:0 24px 64px rgba(0,0,0,0.3);">'
       + '<div style="background:#dc2626;padding:14px 20px;display:flex;justify-content:space-between;align-items:center;">'
-      +   '<div style="color:#fff;font-weight:800;font-size:14px;">⚠ RawBT tidak merespons</div>'
-      +   '<button onclick="document.getElementById(\'__kot_modal__\').remove()" style="color:#fff;background:rgba(255,255,255,0.2);border:none;border-radius:8px;padding:4px 10px;font-size:16px;cursor:pointer;">✕</button>'
+      +   '<div style="color:#fff;font-weight:800;font-size:14px;">RawBT tidak merespons</div>'
+      +   '<button onclick="document.getElementById(\'__kot_modal__\').remove()" style="color:#fff;background:rgba(255,255,255,0.2);border:none;border-radius:8px;padding:4px 10px;font-size:16px;cursor:pointer;">X</button>'
       + '</div>'
       + '<div style="padding:16px 20px;">'
-      +   '<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:12px 14px;margin-bottom:14px;font-size:12px;color:#dc2626;line-height:1.6;">'
-      +     '1. Pastikan app <b>RawBT</b> sudah terbuka di background<br/>'
-      +     '2. Cek printer "<b>printerSS</b>" sudah dipilih di RawBT<br/>'
-      +     '3. Atau copy teks di bawah → paste di RawBT'
-      +   '</div>'
       +   '<pre style="background:#1e293b;color:#e2e8f0;border-radius:10px;padding:12px;font-size:10px;font-family:monospace;overflow-x:auto;white-space:pre;max-height:180px;overflow-y:auto;">'
       +   text.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
       +   '</pre>'
       + '</div>'
       + '<div style="padding:0 20px 20px;display:flex;gap:10px;">'
-      +   '<a href="rawbt://print?printer=sawahsenja" '
-      +      'style="flex:1;background:#2563eb;color:#fff;text-decoration:none;text-align:center;padding:12px;border-radius:12px;font-weight:800;font-size:13px;display:block;">Buka RawBT →</a>'
-      +   '<button id="__kot_copy_btn__" '
-      +     'style="background:#f1f5f9;border:1.5px solid #e2e8f0;border-radius:12px;padding:12px 16px;font-weight:700;font-size:13px;cursor:pointer;color:#475569;">📋 Copy</button>'
+      +   '<a href="rawbt://print?printer=sawahsenja" style="flex:1;background:#2563eb;color:#fff;text-decoration:none;text-align:center;padding:12px;border-radius:12px;font-weight:800;font-size:13px;display:block;">Buka RawBT</a>'
+      +   '<button id="__kot_copy_btn__" style="background:#f1f5f9;border:1.5px solid #e2e8f0;border-radius:12px;padding:12px 16px;font-weight:700;font-size:13px;cursor:pointer;color:#475569;">Copy</button>'
       + '</div>'
       + '</div>';
-
     document.body.appendChild(modal);
-
-    // Copy button — aman untuk iOS Safari (tidak pakai inline onclick)
     var copyBtn = document.getElementById("__kot_copy_btn__");
     if(copyBtn) {
       copyBtn.addEventListener("click", function() {
-        if(navigator.clipboard && navigator.clipboard.writeText) {
+        if(navigator.clipboard) {
           navigator.clipboard.writeText(text).then(function(){
-            copyBtn.textContent = "✓ Disalin";
-            setTimeout(function(){ copyBtn.textContent = "📋 Copy"; }, 1500);
-          }).catch(function(){});
-        } else {
-          var ta = document.createElement("textarea");
-          ta.value = text; ta.style.cssText = "position:fixed;top:0;left:0;opacity:0;font-size:16px;";
-          document.body.appendChild(ta); ta.focus(); ta.select();
-          try { document.execCommand("copy"); } catch(e2) {}
-          document.body.removeChild(ta);
-          copyBtn.textContent = "✓ Disalin";
-          setTimeout(function(){ copyBtn.textContent = "📋 Copy"; }, 1500);
+            copyBtn.textContent = "Disalin"; setTimeout(function(){ copyBtn.textContent = "Copy"; }, 1500);
+          });
         }
       });
     }
-
-    modal.addEventListener("click", function(e) {
-      if (e.target === modal) modal.remove();
-    });
+    modal.addEventListener("click", function(e) { if (e.target === modal) modal.remove(); });
   }
 
-  // ── Jalankan ─────────────────────────────────────────────────
   tryRawBT();
 }
 
@@ -1203,6 +1162,7 @@ function renderOrders() {
       if(action==="open-pos")       openPOS(order);
       if(action==="send-wa")        sendReadyWA(order);
       if(action==="send-receipt")   sendReceiptWA(order);
+      if(action==="reprint-nota")   printNota(order);
       if(action==="delete-order")   deleteOrder(id,btn.dataset.label);
     });
   });
@@ -1246,6 +1206,12 @@ function buildCard(o) {
 
   // ── DONE: Kirim Nota + Arsipkan ──────────────────────────────
   const doneActions = o.orderStatus==="DONE" ? `
+    <button data-action="reprint-nota" data-id="${o.id}" class="act-btn act-btn--kot" title="Cetak ulang nota">
+      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/>
+      </svg>
+      Cetak Ulang
+    </button>
     <button data-action="send-receipt" data-id="${o.id}" class="act-btn act-btn--wa${o.receiptSent?" opacity-60":""}">
       <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/><path d="M12 0C5.373 0 0 5.373 0 12c0 2.127.558 4.126 1.533 5.858L0 24l6.335-1.502A11.955 11.955 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 22c-1.853 0-3.585-.5-5.082-1.373l-.362-.217-3.761.892.952-3.669-.239-.381A9.955 9.955 0 012 12C2 6.477 6.477 2 12 2s10 4.477 10 10-4.477 10-10 10z"/></svg>
       ${o.receiptSent?"✓ Nota Terkirim":"Kirim Nota WA"}
@@ -2275,6 +2241,84 @@ function renderReportPanel() {
   </div>`;
 }
 
+
+// ── Rekap Closing ────────────────────────────────────────────
+function showClosingRecap() {
+  if(!reportOrders.length){ showToast("Load laporan dulu","error"); return; }
+  const d     = buildReportData();
+  const store = appSettings.storeName||"Sawah Senja";
+  const period = d.dateFrom===d.dateTo ? fmtDateStr(d.dateFrom) : fmtDateStr(d.dateFrom)+" - "+fmtDateStr(d.dateTo);
+  const PM_ORDER = ["Cash","QRIS","Transfer","Debit"];
+  const byPM = {};
+  d.paid.forEach(o=>{
+    const pm=o.paymentMethod||"Lainnya";
+    if(!byPM[pm]) byPM[pm]={count:0,total:0};
+    byPM[pm].count++; byPM[pm].total+=o.total||0;
+  });
+  const allPM = [...PM_ORDER,...Object.keys(byPM).filter(p=>!PM_ORDER.includes(p))];
+  const W=32;
+  const copyLines=["REKAP CLOSING - "+store,"Periode: "+period,"Dicetak: "+new Date().toLocaleString("id-ID"),"-".repeat(W)];
+  const printLines=["","=".repeat(W)," ".repeat(Math.max(0,Math.floor((W-14)/2)))+"REKAP CLOSING","=".repeat(W),"Periode: "+period,"-".repeat(W)];
+  allPM.forEach(pm=>{
+    if(!byPM[pm]) return;
+    const val="Rp "+Number(byPM[pm].total).toLocaleString("id-ID");
+    copyLines.push(pm.padEnd(10)+": "+val+" ("+byPM[pm].count+"x)");
+    const lbl=pm.padEnd(10)+": ";
+    printLines.push(lbl+" ".repeat(Math.max(0,W-lbl.length-val.length))+val);
+    printLines.push("  ("+byPM[pm].count+" transaksi)");
+  });
+  const totVal="Rp "+Number(d.grossRevenue).toLocaleString("id-ID");
+  copyLines.push("-".repeat(W),"TOTAL     : "+totVal,"("+d.paid.length+" lunas dari "+d.total+" order)");
+  const totLbl="TOTAL     : ";
+  printLines.push("=".repeat(W),totLbl+" ".repeat(Math.max(0,W-totLbl.length-totVal.length))+totVal,"("+d.paid.length+" lunas dari "+d.total+")","=".repeat(W),"","","");
+  const copyText=copyLines.join("\n"), printText=printLines.join("\n");
+  document.getElementById("__closing_modal__")?.remove();
+  const overlay=document.createElement("div");
+  overlay.id="__closing_modal__"; overlay.className="closing-modal-overlay";
+  const rowsHtml=allPM.map(pm=>{
+    if(!byPM[pm]) return "";
+    return `<div class="closing-row"><div><div class="closing-row__label">${pm}</div><div class="closing-row__count">${byPM[pm].count} transaksi</div></div><div class="closing-row__value">${fmt(byPM[pm].total)}</div></div>`;
+  }).join("");
+  overlay.innerHTML=`<div class="closing-modal">
+    <div class="closing-modal__header">
+      <div class="closing-modal__title">Rekap Closing</div>
+      <div class="closing-modal__sub">${period} &middot; ${store}</div>
+    </div>
+    <div class="closing-modal__body">
+      ${rowsHtml}
+      <div class="closing-row closing-row--total">
+        <div><div class="closing-row__label">TOTAL REVENUE</div>
+        <div class="closing-row__count">${d.paid.length} lunas &middot; ${d.total-d.paid.length} pending</div></div>
+        <div class="closing-row__value">${fmt(d.grossRevenue)}</div>
+      </div>
+      <div style="margin-top:14px;background:#fdf4ff;border:1px solid #c4b5fd;border-radius:10px;padding:10px 12px;font-size:12px;color:#6d28d9;line-height:1.6;">
+        Input ke Moka: buat transaksi terpisah per metode bayar di atas.
+      </div>
+    </div>
+    <div class="closing-modal__footer">
+      <button class="closing-btn-print" id="__closing_print__">Cetak</button>
+      <button class="closing-btn-copy" id="__closing_copy__">Copy</button>
+      <button class="closing-btn-copy" id="__closing_close__" style="color:#94a3b8;">Tutup</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener("click",e=>{ if(e.target===overlay) overlay.remove(); });
+  document.getElementById("__closing_close__")?.addEventListener("click",()=>overlay.remove());
+  document.getElementById("__closing_copy__")?.addEventListener("click",()=>{
+    navigator.clipboard?.writeText(copyText).then(()=>showToast("Rekap disalin!","success")).catch(()=>showToast("Gagal copy","error"));
+  });
+  document.getElementById("__closing_print__")?.addEventListener("click",()=>{
+    try {
+      const a=document.createElement("a");
+      a.href="rawbt://print?printer=sawahsenja&text="+encodeURIComponent(printText);
+      a.style.display="none"; document.body.appendChild(a); a.click();
+      setTimeout(()=>document.body.removeChild(a),1500);
+      showToast("Rekap dikirim ke printer…","info");
+    } catch(e){ showToast("Gagal: "+e.message,"error"); }
+  });
+}
+window.showClosingRecap=showClosingRecap;
+
 // ── Export Excel ──────────────────────────────────────────────
 function exportExcel() {
   if(!reportOrders.length){ showToast("Load laporan dulu","error"); return; }
@@ -3012,6 +3056,25 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);}
 .pos-quick-btn:hover{background:#fff7ed;border-color:#fed7aa;color:#92400e;}
 
 /* Hapus transaksi di laporan */
+.rpt-btn-closing{background:#fdf4ff;color:#7c3aed;border-color:#c4b5fd;}.rpt-btn-closing:hover{background:#ede9fe;}
+.closing-modal-overlay{position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.55);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;padding:20px;animation:fadeInCl .2s ease;}
+@keyframes fadeInCl{from{opacity:0}to{opacity:1}}
+.closing-modal{background:#fff;border-radius:20px;width:100%;max-width:420px;overflow:hidden;box-shadow:0 24px 64px rgba(0,0,0,.2);}
+.closing-modal__header{background:linear-gradient(135deg,#7c3aed,#a78bfa);padding:18px 22px;}
+.closing-modal__title{color:#fff;font-weight:900;font-size:17px;}
+.closing-modal__sub{color:rgba(255,255,255,.8);font-size:12px;margin-top:2px;}
+.closing-modal__body{padding:20px 22px;}
+.closing-row{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid #f1f5f9;}
+.closing-row:last-child{border-bottom:none;}
+.closing-row__label{font-size:14px;color:#475569;font-weight:600;}
+.closing-row__count{font-size:11px;color:#94a3b8;margin-top:1px;}
+.closing-row__value{font-family:'DM Mono',monospace;font-size:16px;font-weight:800;color:#0f172a;}
+.closing-row--total{padding-top:14px;margin-top:4px;border-top:2px solid #e2e8f0!important;}
+.closing-row--total .closing-row__label{font-size:16px;color:#0f172a;font-weight:900;}
+.closing-row--total .closing-row__value{font-size:20px;color:#7c3aed;}
+.closing-modal__footer{padding:0 22px 20px;display:flex;gap:10px;}
+.closing-btn-print{flex:1;background:linear-gradient(135deg,#7c3aed,#a78bfa);color:#fff;border:none;border-radius:12px;padding:13px;font-weight:800;font-size:14px;cursor:pointer;font-family:inherit;}
+.closing-btn-copy{background:#f8fafc;border:1.5px solid #e2e8f0;color:#64748b;border-radius:12px;padding:13px 16px;font-weight:700;font-size:13px;cursor:pointer;font-family:inherit;}
 .rpt-del-btn{
   background:none;border:none;cursor:pointer;font-size:14px;
   opacity:.35;transition:opacity .15s;padding:2px 6px;border-radius:6px;
@@ -3201,6 +3264,10 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);}
           <button onclick="printReport()" class="rpt-btn-export rpt-btn-print">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/></svg>
             Print / PDF
+          </button>
+          <button onclick="showClosingRecap()" class="rpt-btn-export rpt-btn-closing">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
+            Rekap Closing
           </button>
         </div>
       </div>
